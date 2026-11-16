@@ -17,11 +17,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const api = join(homedir(), '.local/share/.api');
 const args = process.argv.slice(2);
 const step = args[0] || 'all';
-// Settings come from wrangler.jsonc (ORIGIN_BASE_URL, LIBRARY_ROOTS) and these environment variables:
+// Settings come from your wrangler config (WATCHBOX_CONFIG, default worker/wrangler.jsonc: ORIGIN_BASE_URL, LIBRARY_ROOTS)
+// and these environment variables:
 //   WATCHBOX_DATA (default ~/.local/share/watchbox): where library.db is built; ORIGIN_AUTHORIZATION (default: the
 //   "authorization" in ~/.local/share/.api/origin-auth.json); WATCHBOX_REGISTRY: optional id registry from an older
 //   install (keeps file ids stable on a rebuild).
-const vars = JSON.parse(readFileSync(join(here, '../wrangler.jsonc'), 'utf8').replace(/^\s*\/\/.*$/mg, '')).vars || {};
+const configFile = process.env.WATCHBOX_CONFIG || join(here, '../wrangler.jsonc');   // your install's wrangler config
+const vars = JSON.parse(readFileSync(configFile, 'utf8').replace(/^\s*\/\/.*$/mg, '')).vars || {};
 configure(vars);
 const data = process.env.WATCHBOX_DATA || join(homedir(), '.local/share/watchbox');
 const dbPath = args.includes('--db') ? args[args.indexOf('--db') + 1] : join(data, 'library.db');
