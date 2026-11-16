@@ -11,13 +11,31 @@ Point three names at the box (A/AAAA records, not proxied): `cc.box.example.com`
 
 ```sh
 sudo sh box/install.sh --domain box.example.com --worker https://watch.example.com \
-   --storage watchbox@storage.example.com [--storage-port 22] [--storage-path DIR] [--omdb-key KEY] [--harden] [--firewall]
+   --storage watchbox@storage.example.com [--storage-port 22] [--storage-path DIR] [--omdb-key KEY] [--build] [--harden] [--firewall]
 # FreeBSD: sh box/install-freebsd.sh with the same options
 ```
 
 - `--worker`: your watchbox address (the box sends "download finished" notices there, and conversions only read from it).
 - `--storage`: the SSH login on your storage host. `--storage-path` only if that host has no `rrsync` (shared hosting).
 - `--omdb-key`: optional, a free [OMDb](https://www.omdbapi.com/apikey.aspx) key for posters and ratings in c-cli.
+
+- `--build`: compile the box's own programs here instead of using prebuilt ones (see below).
+
+### Where the programs come from
+
+The box runs three small Go programs: **watch-stream** (part of watchbox, in `box/watch-stream/`), **c-cli-web**
+([jgbrwn/c-cli](https://github.com/jgbrwn/c-cli)) and **rsync-web** ([jgbrwn/rsync-web](https://github.com/jgbrwn/rsync-web)),
+at the commits pinned in `box/versions.env`. The installer gets them with `box/get-binaries.sh`:
+
+- **From a release bundle**: they're already in `box/bin/<os>-<arch>/`, built by GitHub Actions for the release.
+- **From a git clone** (default): it downloads the newest release (or `WATCHBOX_VERSION=v0.1.0`), checks it against
+  the release's published SHA-256, and takes the programs for your system from it.
+- **With `--build`** (from a git clone): it compiles them on the box: watch-stream from your checkout, the other two
+  from their pinned commits, using the official Go toolchain downloaded from go.dev to a temporary folder (checksum
+  verified) and deleted afterwards. Use this to run code you changed, or if you'd rather not run prebuilt binaries.
+
+Everything else (qBittorrent, Caddy, FFmpeg, Node or Deno, Python for yt-dlp) comes from the system's packages;
+VueTorrent and yt-dlp are downloaded from their official releases (VueTorrent checksum-pinned).
 
 It installs and starts (as the user `watchbox`, listening on 127.0.0.1 only):
 

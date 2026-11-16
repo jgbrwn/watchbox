@@ -6,9 +6,9 @@
 #   sh install-freebsd.sh --domain box.example.com --worker https://watch.example.com --storage watchbox@storage.example.com \
 #                         [--storage-port 22] [--omdb-key KEY] [--harden]
 #
-# Options as in install.sh. Safe to run again. Never touches the firewall (pf/ipfw): open 80/443 yourself if you use one.
+# Options as in install.sh (including --build). Safe to run again. Never touches the firewall (pf/ipfw): open 80/443 yourself if you use one.
 set -eu
-HARDEN=0
+HARDEN=0 BUILD=
 DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= U=watchbox
 OPT=/usr/local/watchbox PRIV=/var/db/watchbox-box ETC=/usr/local/etc/watchbox RC=/usr/local/etc/rc.d
 VUETORRENT_VERSION=2.36.1
@@ -22,6 +22,7 @@ while [ $# -gt 0 ]; do
     --storage-path) STORAGE_PATH=${2%/}; shift 2 ;;
     --omdb-key) OMDB=$2; shift 2 ;;
     --harden) HARDEN=1; shift ;;
+    --build) BUILD=--build; shift ;;
     -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -38,7 +39,6 @@ WORKER_HOST=${WORKER#https://}
 HERE=$(cd "$(dirname "$0")" && pwd)
 case "$(uname -m)" in amd64) ARCH=amd64 ;; arm64|aarch64) ARCH=arm64 ;; *) echo "unsupported CPU $(uname -m)" >&2; exit 1 ;; esac
 BIN="$HERE/bin/freebsd-$ARCH"
-for b in watch-stream c-cli-web rsync-web; do [ -x "$BIN/$b" ] || { echo "missing $BIN/$b (run from an unpacked watchbox release)" >&2; exit 1; }; done
 say() { printf '\n== %s\n' "$*"; }
 H=/home/$U
 
@@ -46,6 +46,10 @@ say "Packages"
 env ASSUME_ALWAYS_YES=yes pkg install -q caddy qbittorrent-nox ffmpeg rsync deno python3 expat curl >/dev/null
 PYV=$(python3 -c 'import sys; print("%d%d" % sys.version_info[:2])')
 env ASSUME_ALWAYS_YES=yes pkg install -q "py$PYV-sqlite3" >/dev/null || true
+
+say "Programs (watch-stream, c-cli-web, rsync-web)"
+[ -z "$BUILD" ] || env ASSUME_ALWAYS_YES=yes pkg install -q git-lite >/dev/null
+sh "$HERE/get-binaries.sh" freebsd "$ARCH" $BUILD
 
 say "User, folders, programs"
 id "$U" >/dev/null 2>&1 || pw useradd "$U" -m -d "$H" -s /bin/sh -c "watchbox"

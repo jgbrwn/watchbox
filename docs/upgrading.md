@@ -11,8 +11,9 @@ the database is migrated forward, and the installers keep passwords, keys, setti
 2. **Storage:** re-run the installer you used (`storage/install.sh --domain …` or `storage/install-shared.sh …` with
    the same options). It replaces `list.php` and `manage.php`; `config.php`, `.htaccess` (if it wrote it), the password
    and the key stay.
-3. **Download box:** re-run `box/install.sh` (or `install-freebsd.sh`) with the same options. It replaces the
-   programs and restarts the services; qBittorrent's settings, downloads, passwords and keys stay. yt-dlp also updates
+3. **Download box:** re-run `box/install.sh` (or `install-freebsd.sh`) with the same options from the new bundle or
+   pulled clone (a clone fetches the newest release's programs when there's a newer one; with `--build` it
+   recompiles). It replaces the programs and restarts the services; qBittorrent's settings, downloads, passwords and keys stay. yt-dlp also updates
    itself daily.
 
 Order: Cloudflare first is fine; the Worker stays compatible with the previous storage and box versions within a

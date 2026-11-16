@@ -7,9 +7,8 @@
 # Usage: scripts/build-release.sh [version]     (needs go and git)
 set -eu
 VERSION=${1:-dev}
-C_CLI_COMMIT=5e2a6aa       # github.com/jgbrwn/c-cli  (c-cli-web/)
-RSYNC_WEB_COMMIT=57b6d6a   # github.com/jgbrwn/rsync-web  (./cmd/srv)
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/box/versions.env"   # C_CLI_COMMIT, RSYNC_WEB_COMMIT
 OUT=$ROOT/dist/watchbox-$VERSION
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -30,7 +29,8 @@ unset GOOS GOARCH CGO_ENABLED
 
 install -m 755 "$ROOT/storage/install.sh" "$ROOT/storage/install-shared.sh" "$OUT/storage/"
 install -m 644 "$ROOT/storage/list.php" "$ROOT/storage/manage.php" "$ROOT/storage/config.example.php" "$ROOT/storage/htaccess.example" "$OUT/storage/"
-install -m 755 "$ROOT/box/install.sh" "$ROOT/box/install-freebsd.sh" "$ROOT/box/watch-torrent-done" "$OUT/box/"
+install -m 755 "$ROOT/box/install.sh" "$ROOT/box/install-freebsd.sh" "$ROOT/box/watch-torrent-done" "$ROOT/box/get-binaries.sh" "$OUT/box/"
+install -m 644 "$ROOT/box/versions.env" "$OUT/box/"
 install -m 755 "$ROOT/security-check.sh" "$OUT/"
 install -m 644 "$ROOT/LICENSE" "$OUT/"
 (cd "$OUT" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)

@@ -31,8 +31,23 @@ guests** with their own logins and requests, **age limits** for kids, and **shar
 
 ## Install (three parts, about 20 minutes)
 
-Download the latest release (`watchbox-<version>.tar.gz` from [Releases](../../releases)) onto each server, or
-clone this repository.
+### Getting watchbox onto each server
+
+Either way works; use the same one on every server.
+
+| | **Release bundle** (simplest) | **Git clone** |
+|---|---|---|
+| Get it | `curl -fLO https://github.com/jgbrwn/watchbox/releases/latest/download/watchbox-<version>.tar.gz` (see [Releases](../../releases)), then `tar xzf` it | `git clone https://github.com/jgbrwn/watchbox` |
+| Storage installers | PHP files included | PHP files included |
+| Download box programs (watch-stream, c-cli-web, rsync-web) | prebuilt for Linux and FreeBSD (amd64, arm64) and included | the installer downloads the same prebuilt programs from the latest release and checks their SHA-256 sums; or add `--build` to compile them on the box from your checkout (it fetches Go for the build and removes it afterwards) |
+| Cloudflare setup (runs on your own computer) | not included: use a clone | `cd worker && npm install` |
+| Upgrading | download the next bundle | `git pull` |
+
+Storage and the Worker are plain PHP and JavaScript (nothing to compile). Besides its three programs, the box
+installs qBittorrent, Caddy, FFmpeg and Node/Deno from the system's package manager, and VueTorrent and yt-dlp from
+their official releases.
+
+### The three parts
 
 1. **Storage**
    - VPS: `sudo sh storage/install.sh --domain storage.example.com` → [docs/storage-vps.md](docs/storage-vps.md)
@@ -41,8 +56,8 @@ clone this repository.
 2. **Download box** (optional): `sudo sh box/install.sh --domain box.example.com --worker https://watch.example.com
    --storage watchbox@storage.example.com` (FreeBSD: `box/install-freebsd.sh`) → [docs/download-box.md](docs/download-box.md).
    Then give the box's key to the storage installer (`--box-key`).
-3. **Cloudflare**: `cd worker && npm install && npm run setup -- --answers my-answers.json` creates the database,
-   logins and Worker and deploys it → [docs/cloudflare.md](docs/cloudflare.md)
+3. **Cloudflare**, from a clone on your own computer: `cd worker && npm install && npm run setup -- --answers
+   my-answers.json` creates the database, logins and Worker and deploys it → [docs/cloudflare.md](docs/cloudflare.md)
 
 Each step prints the values the next one needs. Then add `https://watch.example.com` as a Jellyfin server in your
 app, sign in with the login the setup printed, and open `https://watch.example.com/admin`.

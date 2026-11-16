@@ -7,3 +7,4 @@ worker/wrangler.*.jsonc
 worker/setup/answers*.json
 !worker/setup/answers.example.json
 *.log
+box/bin/

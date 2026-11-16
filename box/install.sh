@@ -12,13 +12,14 @@
 #   --storage  user@host of the storage server; files are copied into its movies/ tv/ youtube/ folders with rsync
 #   --storage-path  only if the storage server can't restrict the box's key with rrsync: the media folder there
 #
-# Run from an unpacked watchbox release (bin/linux-<arch>/ holds watch-stream, c-cli-web, rsync-web).
+# Run from an unpacked watchbox release (it includes the programs) or a git clone (the programs are then downloaded
+# from the latest release, checksum-verified; or add --build to compile them here: see get-binaries.sh).
 # --harden applies the safe fixes from security-check.sh (SSH keys-only, automatic security updates, fail2ban,
 # time sync); --firewall also turns on ufw (allowing SSH, 80, 443 and the torrent port). Without them it only reports.
 # Safe to run again (keeps passwords, keys and qBittorrent's settings). Never touches the firewall.
 # Prints this box's SSH key (give it to the storage installer: --box-key) and the values the Cloudflare setup needs.
 set -eu
-HARDEN=0 FIREWALL=0
+HARDEN=0 BUILD= FIREWALL=0
 
 DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= U=watchbox
 OPT=/opt/watchbox PRIV=/var/lib/watchbox-box ETC=/etc/watchbox
@@ -33,6 +34,7 @@ while [ $# -gt 0 ]; do
     --storage-path) STORAGE_PATH=${2%/}; shift 2 ;;
     --omdb-key) OMDB=$2; shift 2 ;;
     --harden) HARDEN=1; shift ;;
+    --build) BUILD=--build; shift ;;
     --firewall) FIREWALL=1; shift ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -51,7 +53,6 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 case "${ID:-} ${ID_LIKE:-}" in *debian*|*ubuntu*) ;; *) echo "this installer supports Debian and Ubuntu (FreeBSD: install-freebsd.sh)" >&2; exit 1 ;; esac
 case "$(uname -m)" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "unsupported CPU $(uname -m)" >&2; exit 1 ;; esac
 BIN="$HERE/bin/linux-$ARCH"
-for b in watch-stream c-cli-web rsync-web; do [ -x "$BIN/$b" ] || { echo "missing $BIN/$b (run from an unpacked watchbox release)" >&2; exit 1; }; done
 say() { printf '\n== %s\n' "$*"; }
 H=/home/$U
 
@@ -59,6 +60,10 @@ say "Packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq caddy qbittorrent-nox ffmpeg python3-venv nodejs rsync openssh-client curl unzip openssl >/dev/null
+
+say "Programs (watch-stream, c-cli-web, rsync-web)"
+[ -z "$BUILD" ] || apt-get install -y -qq git >/dev/null
+sh "$HERE/get-binaries.sh" linux "$ARCH" $BUILD
 
 say "User, folders, programs"
 id "$U" >/dev/null 2>&1 || useradd --create-home --home-dir "$H" --shell /bin/sh "$U"
