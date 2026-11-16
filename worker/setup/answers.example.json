@@ -1,0 +1,14 @@
+{
+  "name": "watchbox",
+  "hostname": "watch.example.com",
+  "admin_email": "you@example.com",
+  "server_name": "Watch",
+  "api_token": "Cloudflare API token: Workers Scripts edit, Workers Routes edit, D1 edit, Zone DNS edit, Account Settings read",
+  "access_api_token": "optional: a separate token with Access: Apps and Policies edit, Identity Providers edit (else api_token needs those too)",
+  "tmdb_token": "TMDB API Read Access Token",
+  "storage_values_file": "path to cloudflare-values.txt from the storage installer (or fill \"storage\" below)",
+  "storage": { "name": "storage", "quota_mb": null },
+  "box_values_file": "optional: path to cloudflare-values.txt from the download-box installer",
+  "owner_user": { "username": "me" },
+  "fix_tls": false
+}

@@ -1,0 +1,39 @@
+// watchbox Worker configuration, for setting up by hand. The setup wizard (npm run setup) writes this for you as
+// wrangler.<name>.jsonc; see docs/cloudflare.md. Secrets (wrangler secret put NAME): TMDB_TOKEN, ORIGIN_AUTHORIZATION,
+// MANAGE_SECRET, TOOLS_SECRET, and with a download box TOOLS_AUTHORIZATION and RSYNC_WEBHOOK_SECRET.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watchbox",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-15",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "watch.example.com", "custom_domain": true }
+    // with a download box, also: watch-cc / watch-dl / watch-rs.example.com (the TOOLS hosts below)
+  ],
+  "vars": {
+    "SERVER_NAME": "Watch",
+    "ADMIN_ORIGIN": "https://watch.example.com",
+    "ORIGIN_BASE_URL": "https://storage.example.com/",
+    "JELLYFIN_SERVER_ID": "32 random hex characters; never change it once apps are signed in",
+    "ACCESS_TEAM_DOMAIN": "https://YOUR-TEAM.cloudflareaccess.com",
+    "ACCESS_AUD": "audience tag of the /admin Access app",
+    "GUEST_ACCESS_AUD": "audience tag of the /me Access app",
+    "ADMIN_EMAIL_ALLOWLIST": "you@example.com",
+    "EMAIL_FROM": "Watch <watch@example.com>",
+    // Folders on the storage host (ids as in its config.php). Never rename an id once the library is built.
+    "LIBRARY_ROOTS": [{ "id": "movies", "library": "movies" }, { "id": "tv", "library": "tv" }, { "id": "youtube", "library": "youtube" }],
+    "STORAGE_NAME": "storage",
+    // "STORAGE_QUOTA_MB": "8388608",   // shared hosting: the plan's quota (a VPS reports its disk size itself)
+    "BOX_NAME": "the download box",
+    "BOX_MEDIA_PATH": "/home/watchbox/media/"
+    // "TOOLS": { "cc": {...}, "dl": {...}, "rs": {...} }   see the box installer's cloudflare-values.txt
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "watchbox", "database_id": "from: wrangler d1 create watchbox", "migrations_dir": "migrations" }],
+  "send_email": [{ "name": "EMAIL" }],
+  "ratelimits": [{ "name": "LOGIN_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "limits": { "cpu_ms": 120000 },
+  "observability": { "enabled": true }
+}

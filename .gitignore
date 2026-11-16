@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+worker/wrangler.*.jsonc
+!worker/wrangler.example.jsonc
+worker/setup/answers*.json
+!worker/setup/answers.example.json
+*.log

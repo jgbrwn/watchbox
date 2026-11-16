@@ -1,0 +1,14 @@
+{
+  "name": "watchbox-worker",
+  "private": true,
+  "type": "module",
+  "description": "watchbox: a Jellyfin-compatible media server on Cloudflare Workers",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --import ./test/setup.mjs --test test/*.test.mjs",
+    "setup": "node setup/setup.mjs",
+    "dev": "wrangler dev --local --config wrangler.example.jsonc"
+  },
+  "devDependencies": { "wrangler": "4.151.1" }
+}

@@ -1,0 +1,15 @@
+#!/bin/sh
+# qBittorrent "Run external program on torrent finished": <path>/watch-torrent-done "%I"
+# Tells the Watch Worker a download finished; the Worker decides whether to send it to the library
+# (admin page > Pipeline > auto-send). Config (mode 600): ~/.config/watch-hook.env with
+#   WATCH_HOOK_URL=https://watch.example.com/hooks/qbit
+#   WATCH_HOOK_SECRET=<same value as the Worker secret RSYNC_WEBHOOK_SECRET>
+set -u
+case "${1:-}" in ''|*[!0-9a-f]*) exit 0 ;; esac
+. "$HOME/.config/watch-hook.env" || exit 0
+body="{\"hash\":\"$1\",\"at\":$(date +%s)}"
+sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WATCH_HOOK_SECRET" | sed 's/^.*= //')
+# Background it so qBittorrent never waits on the network.
+(curl -fsS -m 20 --retry 3 --retry-delay 5 -H 'Content-Type: application/json' -H "X-Watch-Signature: sha256=$sig" \
+  -d "$body" "$WATCH_HOOK_URL" >/dev/null 2>&1 || logger -t watch-torrent-done "hook failed for $1") &
+exit 0

@@ -1,0 +1,52 @@
+# watchbox storage on shared hosting (Apache / LiteSpeed): the .htaccess for the folder that holds list.php,
+# manage.php, config.php and the src/<root> links. Replace the two CHANGE-ME values.
+Options -Indexes -MultiViews +SymLinksIfOwnerMatch
+DirectoryIndex disabled
+RewriteEngine On
+# Only GET/HEAD, except POST to manage.php.
+RewriteCond %{REQUEST_METHOD} !^(GET|HEAD)$
+RewriteCond %{REQUEST_URI} !^/manage\.php$
+RewriteRule ^ - [F,L]
+# HTTPS only (certificate renewals over HTTP still work).
+RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/[A-Za-z0-9_-]+$
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L,NE]
+# No dotfiles anywhere (except certificate checks).
+RewriteRule (^|/)\.(?!well-known(?:/|$)) - [F,L]
+
+AuthType Basic
+AuthName "watchbox storage"
+# CHANGE-ME: an htpasswd file OUTSIDE the web folder (htpasswd -B -c /home/USER/watchbox-private/htpasswd watchbox)
+AuthUserFile "/home/USER/watchbox-private/htpasswd"
+Require valid-user
+
+<FilesMatch "^\.">
+ Require all denied
+</FilesMatch>
+# No PHP or other scripts, configs, databases or backups, except the two below.
+<FilesMatch "(?i)\.(?:php[0-9]?|phtml|phar|cgi|pl|py|rb|sh|sqlite[0-9]?|db|ini|env|log|bak|tmp|part)$">
+ Require all denied
+</FilesMatch>
+<Files "list.php">
+ Require valid-user
+</Files>
+<Files "manage.php">
+ Require valid-user
+</Files>
+
+<IfModule mod_headers.c>
+ Header always set Cache-Control "private, no-store, no-transform"
+ Header always set X-Content-Type-Options "nosniff"
+</IfModule>
+<IfModule mod_mime.c>
+  AddType video/mp4 .mp4 .m4v
+  AddType video/x-matroska .mkv
+  AddType video/webm .webm
+  AddType video/quicktime .mov
+  AddType video/x-msvideo .avi
+  AddType video/mp2t .ts .m2ts
+</IfModule>
+# Video must not be compressed on the fly (byte ranges).
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase Request_URI "\.(?:mp4|m4v|mkv|webm|mov|avi|ts|m2ts)$" no-gzip=1 no-brotli=1
+</IfModule>

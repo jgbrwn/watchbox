@@ -1,0 +1,20 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions: { contents: write }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - name: Build bundle (storage, box, binaries for linux/freebsd amd64/arm64)
+        run: scripts/build-release.sh "${GITHUB_REF_NAME}"
+      - name: Publish
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          cd dist
+          sha256sum "watchbox-${GITHUB_REF_NAME}.tar.gz" > "watchbox-${GITHUB_REF_NAME}.tar.gz.sha256"
+          gh release create "${GITHUB_REF_NAME}" --generate-notes "watchbox-${GITHUB_REF_NAME}.tar.gz" "watchbox-${GITHUB_REF_NAME}.tar.gz.sha256"

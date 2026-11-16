@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+permissions: { contents: read }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Worker tests
+        working-directory: worker
+        run: npm ci && npm test
+      - name: Setup wizard syntax
+        run: node --check worker/setup/setup.mjs
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - name: watch-stream
+        working-directory: box/watch-stream
+        run: go vet ./... && go test ./... && GOOS=freebsd go build -o /dev/null .
+      - name: PHP lint
+        run: for f in storage/*.php; do php -l "$f"; done
+      - name: Shell syntax
+        run: for f in storage/*.sh box/*.sh security-check.sh scripts/*.sh; do sh -n "$f"; done

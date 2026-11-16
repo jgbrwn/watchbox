@@ -1,0 +1,63 @@
+# Using watchbox
+
+## Apps
+
+Add `https://watch.example.com` as a Jellyfin server and sign in. Tested with VidHub, the official Jellyfin apps
+(Android TV, Android, iOS, Fire TV), Swiftfin, Findroid and Streamyfin. Continue watching, next up, favorites,
+played/unplayed, resume across devices, subtitles (external SRT/VTT/ASS) and multiple versions of a title work as in
+Jellyfin. Apps play the original files (no server-side transcoding), so the device must support the codec; VidHub and
+the Jellyfin apps on Android TV play almost anything.
+
+**Quick Connect:** apps that support it (the official Jellyfin apps, Swiftfin, Findroid, Streamyfin; not VidHub or
+Infuse) show a 6-digit code instead of asking for a password. Approve it on `/me` (guests), on `/admin` → Users, or
+from another signed-in app.
+
+## Naming files
+
+Movies: `Title (Year)/Title (Year).mkv`, or loose `Title.Year.1080p.mkv`; extra versions in the same folder become
+versions of one movie ("Extended", "4K" …); `-sample`, trailers and extras are recognised and kept out of the library.
+TV: `Show (Year)/Season 1/Show S01E02.mkv` (also `1x02`, `Episode 2`, absolute numbering, multi-episode `S01E01-E02`).
+Subtitles next to the video with the same name (`Title (Year).en.srt`, `.forced.srt`). Wrong match: fix it on the
+admin page (Library → the unmatched list's TMDB form, or paste a TMDB link for any key).
+
+## The admin page (`/admin`)
+
+| Tab | |
+|---|---|
+| Library | search and **watch in the browser**, recently added, storage and box disk meters, unmatched files with a fix form, *Sync now*, sync log |
+| Manage | find files; lists of sample clips, very short files, duplicate copies and extras; delete into a 14-day trash with **Restore** (refused while a download is still on the box) |
+| Users | invite people by email (or create a plain login), age limits, devices with location and sign-out, Quick Connect, share links, title age ratings, test email |
+| Pipeline | requests from guests, YouTube (videos and playlists), finished downloads with **Send to library**, downloads in progress, copy history, auto-send and cleanup settings |
+| Find · Downloads · Transfer | the download box's c-cli, qBittorrent (VueTorrent) and rsync-web, if you have one |
+
+## Guests (`/me`)
+
+Invite someone on Users: they get an email with a link, sign in to `/me` with a one-time code sent to that email,
+set their password, and follow the setup steps for their TV or phone. On `/me` they can browse and watch in the
+browser, ask for movies, shows or YouTube videos (paste a link), see their requests' progress, manage their devices
+and share links. Each person has their own progress and favorites; nobody sees anyone else's.
+
+Requests: you approve or decline on Pipeline. *Download* picks the best 1080p YTS torrent with seeders; shows are
+found by hand on Find. A person marked *auto-approve* gets movies and YouTube videos downloaded straight away
+(playlists up to 25 videos). Everyone who asked is emailed when the title is in the library.
+
+## YouTube
+
+Paste a video or playlist link on Pipeline → YouTube and pick 720p, 1080p or 4K. Videos land in a **YouTube**
+library (channel as studio, upload date, description, thumbnail and poster). A playlist opens a preview where you can
+save it as **episodes of a TV show** instead: season and episode numbers are read from the titles ("S01E09", "Season
+1 Episode 9") and editable; the files then join the show in your TV library, and where you already had an episode,
+both become versions (the bigger file plays by default; delete the old one under Manage → duplicates).
+
+## Share links
+
+On a movie or episode's watch page, *Share link* makes `https://watch.example.com/s/<random>` that plays that one
+title in any browser without signing in: 1, 7 or 30 days (you can also make never-expiring ones), revocable any time
+(Users → Shared links), views counted. Guests can make them if you allow it. A link reaches only that title.
+
+## Age limits
+
+Give a person an age limit (7, 12, 14, 16) on Users. Ages come from certificates (US first, then other countries
+from TMDB). A limited person only sees titles at or under their limit, everywhere (apps, search, continue watching,
+/me, streams). Unrated titles, including YouTube videos, are hidden unless you allow unrated for them or give the title
+an age under Users → Age ratings. Give kids their own login: a TV signed in as an adult shows everything.
