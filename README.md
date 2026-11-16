@@ -20,6 +20,21 @@ guests** with their own logins and requests, **age limits** for kids, and **shar
    finished downloads and YouTube videos ──rsync──▶ storage host
 ```
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Admin page: library](docs/screenshots/admin-library.jpg) | ![Admin page: pipeline with requests, downloads and YouTube](docs/screenshots/admin-pipeline.jpg) |
+| **Admin → Library**: stats, storage, recently added, browser playback search | **Admin → Pipeline**: guests' requests, downloads, copies to storage, YouTube |
+| ![Admin page: users](docs/screenshots/admin-users.jpg) | ![Guest page: library](docs/screenshots/guest-library.jpg) |
+| **Admin → Users**: invites, age limits, devices | **Guest page `/me`**: browse and watch, request titles |
+| ![Watch page](docs/screenshots/watch-page.jpg) | ![Light theme](docs/screenshots/admin-library-light.jpg) |
+| **Browser player** (direct or converted on the box), share links | Light and dark themes |
+
+<p><img src="docs/screenshots/phone-library.jpg" width="260" alt="Admin page on a phone: library"> <img src="docs/screenshots/phone-pipeline.jpg" width="260" alt="Admin page on a phone: pipeline"></p>
+
+(Demo people and settings; the titles are a real library's posters from TMDB.)
+
 ## What you need
 
 - A domain on **Cloudflare**, the **Workers Paid** plan ($5/month: the library sync needs more CPU time than the

@@ -473,7 +473,7 @@ function show(id) {
   const f = document.querySelector('#' + id + ' iframe');
   if (f && !f.src) f.src = f.dataset.src;
   const ext = $('#ext'); ext.hidden = !f; if (f) ext.href = f.dataset.src;
-  if (id === 'pipeline') refresh();
+  if (id === 'pipeline') setTimeout(refresh);   // deferred: on a page opened at #pipeline this runs before the code below is set up
   if (id === 'manage' && !manageLoaded) { manageLoaded = true; setTimeout(() => { loadSuggestions(); loadTrash(); }); }
   if (id === 'users') setTimeout(() => { loadUsers(); loadShares(); loadAges(); });
   if (id === 'pipeline') setTimeout(() => { loadRequests(); loadYoutube(); });
