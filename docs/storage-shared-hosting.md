@@ -2,6 +2,7 @@
 
 Shared hosting with lots of disk is the cheapest place for a video library. You need PHP 8 (any web server that reads
 `.htaccess`: Apache or LiteSpeed), SSH access, and a (sub)domain with HTTPS.
+The optional [download box](download-box.md) can't run on shared hosting; it needs its own small VPS.
 
 ## 1. Create the storage subdomain
 

@@ -44,7 +44,7 @@ Android, Fire TV), Swiftfin, Findroid, Streamyfin and other Jellyfin clients.
 - A **storage host** with your videos: shared hosting with PHP 8 and SSH (DirectAdmin and cPanel are supported,
   including [HostBRR storage plans](docs/storage-shared-hosting.md#hostbrr)), or a Debian/Ubuntu VPS.
 - A free **TMDB** API read token.
-- Optional: a **download box**, a small Debian, Ubuntu or FreeBSD VPS.
+- Optional: a **download box**, a small Debian, Ubuntu or FreeBSD VPS (a separate one when storage is shared hosting).
 
 ## Install (three parts, about 20 minutes)
 

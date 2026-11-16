@@ -46,3 +46,5 @@ with rsync inside the media folder, nothing else (no shell, no other paths).
 
 Storage and download box can share one VPS: run both installers with their own domains (e.g. `storage.example.com` and
 `box.example.com`), and give the box `--storage watchbox@storage.example.com` (it copies to itself over SSH).
+This works only with VPS storage: shared hosting (DirectAdmin, cPanel, HostBRR) can't run the download box, which
+needs root and long-running services, so there the box is always a second machine.

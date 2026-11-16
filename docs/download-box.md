@@ -4,6 +4,10 @@ A small VPS (1–2 CPUs, 2 GB RAM, disk for downloads in progress) that finds an
 downloads to your storage, downloads YouTube videos, and converts videos browsers can't play. Debian 12+/Ubuntu 22.04+
 or FreeBSD 14+.
 
+It has to be a VPS (root, long-running services, its own ports): shared hosting can't run it, and that includes
+HostBRR storage plans. With shared-hosting storage the box is a separate machine that copies to the storage over SSH.
+With a VPS for storage, one server can be both: see [One server for everything](storage-vps.md#one-server-for-everything).
+
 ## Install
 
 Point three names at the box (A/AAAA records, not proxied): `cc.box.example.com`, `dl.box.example.com`,
