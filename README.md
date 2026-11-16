@@ -1,13 +1,27 @@
 # watchbox
 
+![watchbox admin page: library, storage and recently added](docs/screenshots/admin-library.jpg)
+
 Your own movie and TV server, without running a media server. **watchbox** speaks the Jellyfin API from a Cloudflare
 Worker, streams your video files straight from a storage host you already have (cheap shared hosting with PHP, or a
 VPS), and gets its posters and metadata from TMDB. Use it with VidHub, the official Jellyfin apps (Android TV, iOS,
 Android, Fire TV), Swiftfin, Findroid, Streamyfin and other Jellyfin clients.
 
-Optional extras: a **download box** (any small Linux or FreeBSD VPS) to find and download new titles and YouTube
-videos and copy them to your storage automatically, **browser playback** with on-the-fly conversion, **invited
-guests** with their own logins and requests, **age limits** for kids, and **share links** for one title.
+## What you get
+
+- **A Jellyfin server for your apps**: continue watching, next up, favorites, subtitles, several versions per title,
+  Quick Connect, posters and metadata from TMDB, a library that updates itself every 15 minutes.
+- **An admin page** to manage the library, delete into a restorable trash, and see storage at a glance.
+- **Optional download box** (any small Linux or FreeBSD VPS): find and download titles, add YouTube videos and
+  playlists, and copy everything to your storage automatically.
+- **Invited guests** with their own logins, watch history and requests, **age limits** for kids,
+  **browser playback** (converted on the fly when needed) and **share links** for one title.
+
+| ![Pipeline: requests, downloads, copies to storage and YouTube](docs/screenshots/admin-pipeline.jpg) | ![Guest page: browse, watch and request](docs/screenshots/guest-library.jpg) |
+|---|---|
+| **Pipeline**: guests' requests, downloads in progress, copies to storage, YouTube | **Guest page**: invited people browse, watch in the browser and ask for titles |
+
+## How it fits together
 
 ```
  Storage host (PHP + your files)                Cloudflare
@@ -20,20 +34,8 @@ guests** with their own logins and requests, **age limits** for kids, and **shar
    finished downloads and YouTube videos ──rsync──▶ storage host
 ```
 
-## Screenshots
-
-| | |
-|---|---|
-| ![Admin page: library](docs/screenshots/admin-library.jpg) | ![Admin page: pipeline with requests, downloads and YouTube](docs/screenshots/admin-pipeline.jpg) |
-| **Admin → Library**: stats, storage, recently added, browser playback search | **Admin → Pipeline**: guests' requests, downloads, copies to storage, YouTube |
-| ![Admin page: users](docs/screenshots/admin-users.jpg) | ![Guest page: library](docs/screenshots/guest-library.jpg) |
-| **Admin → Users**: invites, age limits, devices | **Guest page `/me`**: browse and watch, request titles |
-| ![Watch page](docs/screenshots/watch-page.jpg) | ![Light theme](docs/screenshots/admin-library-light.jpg) |
-| **Browser player** (direct or converted on the box), share links | Light and dark themes |
-
-<p><img src="docs/screenshots/phone-library.jpg" width="260" alt="Admin page on a phone: library"> <img src="docs/screenshots/phone-pipeline.jpg" width="260" alt="Admin page on a phone: pipeline"></p>
-
-(Demo people and settings; the titles are a real library's posters from TMDB.)
+<p align="center"><img src="docs/screenshots/phone-library.jpg" width="240" alt="Admin page on a phone: library"> &nbsp; <img src="docs/screenshots/phone-pipeline.jpg" width="240" alt="Admin page on a phone: pipeline"></p>
+<p align="center"><sub>Works on phones too. <b><a href="docs/screenshots/">More screenshots →</a></b> (users and age limits, the browser player, light theme)</sub></p>
 
 ## What you need
 
@@ -81,6 +83,7 @@ app, sign in with the login the setup printed, and open `https://watch.example.c
 
 | | |
 |---|---|
+| [Screenshots](docs/screenshots/) | the admin page, the guest page, the browser player, on a phone |
 | [Using watchbox](docs/using.md) | apps, the admin page, guests and requests, YouTube, share links, age limits |
 | [Architecture](docs/architecture.md) | how the pieces fit, what is stored where, the library sync |
 | [Storage on a VPS](docs/storage-vps.md) · [on shared hosting](docs/storage-shared-hosting.md) | installing, folders, disk usage, HostBRR |
