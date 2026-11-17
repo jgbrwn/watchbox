@@ -4,13 +4,15 @@
 # themselves only listen on 127.0.0.1.
 #
 #   sudo sh install.sh --domain box.example.com --worker https://watch.example.com \
-#                      --storage watchbox@storage.example.com [--storage-port 22] [--omdb-key KEY]
+#                      --storage watchbox@storage.example.com [--storage-port 22] [--tmdb-token TOKEN]
 #
 #   --domain   base name: the tools get cc.<domain> (find), dl.<domain> (downloads + conversions), rs.<domain>
 #              (transfers); point all three at this server
 #   --worker   your watchbox address (finished-download and YouTube notices go there; conversions only read from it)
 #   --storage  user@host of the storage server; files are copied into its movies/ tv/ youtube/ folders with rsync
 #   --storage-path  only if the storage server can't restrict the box's key with rrsync: the media folder there
+#   --tmdb-token    optional: your TMDB Read Access Token (the same one the Worker uses) for posters and ratings in
+#                   c-cli's Find page; --omdb-key KEY uses OMDb instead
 #
 # Run from an unpacked watchbox release (it includes the programs) or a git clone (the programs are then downloaded
 # from the latest release, checksum-verified; or add --build to compile them here: see get-binaries.sh).
@@ -21,7 +23,7 @@
 set -eu
 HARDEN=0 BUILD= FIREWALL=0
 
-DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= U=watchbox
+DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= TMDB= U=watchbox
 OPT=/opt/watchbox PRIV=/var/lib/watchbox-box ETC=/etc/watchbox
 VUETORRENT_VERSION=2.36.1
 VUETORRENT_SHA256=70b67531f0f3bc36c8bd05d82cc7ba1ee37c71c17f0b6c45f522200e35e66f37
@@ -32,6 +34,7 @@ while [ $# -gt 0 ]; do
     --storage) STORAGE=$2; shift 2 ;;
     --storage-port) STORAGE_PORT=$2; shift 2 ;;
     --storage-path) STORAGE_PATH=${2%/}; shift 2 ;;
+    --tmdb-token|--tmdb-key) TMDB=$2; shift 2 ;;
     --omdb-key) OMDB=$2; shift 2 ;;
     --harden) HARDEN=1; shift ;;
     --build) BUILD=--build; shift ;;
@@ -98,7 +101,9 @@ printf 'WATCH_HOOK_URL=%s/hooks/qbit\nWATCH_HOOK_SECRET=%s\n' "$WORKER" "$HOOK_S
 chown "$U:$U" "$H/.config/watch-hook.env"; chmod 600 "$H/.config/watch-hook.env"
 printf 'RSYNC_WEB_WEBHOOK_SECRET=%s\n' "$HOOK_SECRET" > "$ETC/rsync-web.env"
 [ -f "$ETC/c-cli-web.env" ] || : > "$ETC/c-cli-web.env"
-[ -n "$OMDB" ] && printf 'OMDB_API_KEY=%s\n' "$OMDB" > "$ETC/c-cli-web.env"
+if [ -n "$TMDB$OMDB" ]; then   # c-cli's posters and ratings: TMDB (same token as the Worker) or OMDb; kept on re-runs without them
+  { [ -z "$TMDB" ] || printf 'TMDB_API_KEY=%s\n' "$TMDB"; [ -z "$OMDB" ] || printf 'OMDB_API_KEY=%s\n' "$OMDB"; } > "$ETC/c-cli-web.env"
+fi
 chmod 600 "$ETC/rsync-web.env" "$ETC/c-cli-web.env"
 
 say "SSH key for $STORAGE"

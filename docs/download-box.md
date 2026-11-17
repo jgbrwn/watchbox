@@ -15,13 +15,17 @@ Point three names at the box (A/AAAA records, not proxied): `cc.box.example.com`
 
 ```sh
 sudo sh box/install.sh --domain box.example.com --worker https://watch.example.com \
-   --storage watchbox@storage.example.com [--storage-port 22] [--storage-path DIR] [--omdb-key KEY] [--build] [--harden] [--firewall]
+   --storage watchbox@storage.example.com [--storage-port 22] [--storage-path DIR] [--tmdb-token TOKEN] [--build] [--harden] [--firewall]
 # FreeBSD: sh box/install-freebsd.sh with the same options
 ```
 
 - `--worker`: your watchbox address (the box sends "download finished" notices there, and conversions only read from it).
 - `--storage`: the SSH login on your storage host. `--storage-path` only if that host has no `rrsync` (shared hosting).
-- `--omdb-key`: optional, a free [OMDb](https://www.omdbapi.com/apikey.aspx) key for posters and ratings in c-cli.
+- `--tmdb-token`: optional but recommended: posters, ratings, cast and plot on the Find page (c-cli), sorted by
+  popularity. Use the same free TMDB **API Read Access Token** you gave the Worker ([how to get one](cloudflare.md#tmdb-token));
+  one key covers both. `--omdb-key KEY` uses an [OMDb](https://www.omdbapi.com/apikey.aspx) key instead (if both are
+  given, TMDB is used). To add or change it later, re-run the installer with it, or edit `/etc/watchbox/c-cli-web.env`
+  (FreeBSD: `/usr/local/etc/watchbox/c-cli-web.env`) and restart the c-cli service.
 
 - `--build`: compile the box's own programs here instead of using prebuilt ones (see below).
 

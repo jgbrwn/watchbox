@@ -4,12 +4,12 @@
 # STATUS: not yet run on a fresh FreeBSD install; please report problems.
 #
 #   sh install-freebsd.sh --domain box.example.com --worker https://watch.example.com --storage watchbox@storage.example.com \
-#                         [--storage-port 22] [--omdb-key KEY] [--harden]
+#                         [--storage-port 22] [--tmdb-token TOKEN] [--harden]
 #
 # Options as in install.sh (including --build). Safe to run again. Never touches the firewall (pf/ipfw): open 80/443 yourself if you use one.
 set -eu
 HARDEN=0 BUILD=
-DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= U=watchbox
+DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= TMDB= U=watchbox
 OPT=/usr/local/watchbox PRIV=/var/db/watchbox-box ETC=/usr/local/etc/watchbox RC=/usr/local/etc/rc.d
 VUETORRENT_VERSION=2.36.1
 VUETORRENT_SHA256=70b67531f0f3bc36c8bd05d82cc7ba1ee37c71c17f0b6c45f522200e35e66f37
@@ -20,6 +20,7 @@ while [ $# -gt 0 ]; do
     --storage) STORAGE=$2; shift 2 ;;
     --storage-port) STORAGE_PORT=$2; shift 2 ;;
     --storage-path) STORAGE_PATH=${2%/}; shift 2 ;;
+    --tmdb-token|--tmdb-key) TMDB=$2; shift 2 ;;
     --omdb-key) OMDB=$2; shift 2 ;;
     --harden) HARDEN=1; shift ;;
     --build) BUILD=--build; shift ;;
@@ -86,7 +87,9 @@ printf 'WATCH_HOOK_URL=%s/hooks/qbit\nWATCH_HOOK_SECRET=%s\n' "$WORKER" "$HOOK_S
 chown "$U:$U" "$H/.config/watch-hook.env"; chmod 600 "$H/.config/watch-hook.env"
 printf 'RSYNC_WEB_WEBHOOK_SECRET=%s\n' "$HOOK_SECRET" > "$ETC/rsync-web.env"
 [ -f "$ETC/c-cli-web.env" ] || : > "$ETC/c-cli-web.env"
-[ -n "$OMDB" ] && printf 'OMDB_API_KEY=%s\n' "$OMDB" > "$ETC/c-cli-web.env"
+if [ -n "$TMDB$OMDB" ]; then   # c-cli's posters and ratings: TMDB (same token as the Worker) or OMDb; kept on re-runs without them
+  { [ -z "$TMDB" ] || printf 'TMDB_API_KEY=%s\n' "$TMDB"; [ -z "$OMDB" ] || printf 'OMDB_API_KEY=%s\n' "$OMDB"; } > "$ETC/c-cli-web.env"
+fi
 chmod 600 "$ETC/rsync-web.env" "$ETC/c-cli-web.env"
 
 say "SSH key for $STORAGE"

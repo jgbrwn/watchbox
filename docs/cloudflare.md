@@ -21,7 +21,20 @@ npm run setup -- --answers my-answers.json
    Access permissions into a second token (`access_api_token`).
 4. The values printed by the storage installer (and the download-box installer, if you have one): point
    `storage_values_file` / `box_values_file` at their `cloudflare-values.txt`, or paste the values into `storage`.
-5. A TMDB API Read Access Token (themoviedb.org → Settings → API).
+5. A TMDB API Read Access Token (free; see [below](#tmdb-token)).
+
+### TMDB token
+
+watchbox gets titles, posters, cast, episodes and age ratings from [TMDB](https://www.themoviedb.org). The key is free:
+
+1. Create an account at [themoviedb.org/signup](https://www.themoviedb.org/signup) and confirm your email.
+2. Open [Settings → API](https://www.themoviedb.org/settings/api) and request an API key: choose *Developer*, accept the
+   terms, and fill in the short form (personal, non-commercial use is fine).
+3. Copy the **API Read Access Token** (the long one starting with `eyJ`, not the 32-character API Key).
+
+The same token also goes to the download box (`--tmdb-token`), where it gives the Find page its posters and ratings.
+
+<sub>watchbox uses the TMDB API but is not endorsed or certified by TMDB.</sub>
 
 ## What it does
 
