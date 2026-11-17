@@ -8,7 +8,7 @@
 //    then qBittorrent removes the torrent and its files from the box.
 // Nothing on the storage host is ever deleted (no --delete); cleanup only touches the box.
 import { tools, upstreamFetch } from './tools.mjs';
-import { runSync, scanOnly } from './cron.mjs';
+import { requestSync, scanOnly } from './cron.mjs';
 import { VIDEO_EXT } from './library/parse.mjs';
 import { originHeaders } from './origin.mjs';
 import { cfg } from './config.mjs';
@@ -156,8 +156,8 @@ async function cleanupIfDone(env, rec, settings) {
 }
 
 // Called once a push job has finished (webhook, admin page poll or cron). Idempotent.
-// Fast part first (listing scan, verify, cleanup), then the full sync, which may outlive a
-// webhook's time budget; the cron picks up anything it didn't finish.
+// Fast part (listing scan, verify, cleanup), then it asks for a full sync, which the cron runs within a minute
+// (a full sync can outlive a webhook's time budget).
 export async function finishPush(env, jobId, status, { sync = true } = {}) {
   const key = `push:${jobId}`;
   const rec = await kvGet(env.DB, key);
@@ -176,7 +176,7 @@ export async function finishPush(env, jobId, status, { sync = true } = {}) {
   }
   rec.finished = now(); rec.status = status;
   await kvSet(env.DB, key, rec);
-  if (status === 'completed' && sync) await runSync(env, { force: true });
+  if (status === 'completed' && sync) await requestSync(env);
   return rec;
 }
 
@@ -283,7 +283,7 @@ export async function handlePipeline(request, env, ctx, path) {
   }
 
   if (path === '/admin/api/sync' && request.method === 'POST') {
-    ctx.waitUntil(runSync(env, { force: true }));
+    await requestSync(env);
     return json({ ok: true });
   }
   return json({ error: 'not found' }, 404);
@@ -313,7 +313,7 @@ export async function handleRsyncHook(request, env, ctx) {
   // Any other finished copy may have been into the library: sync (cheap when nothing changed).
   if (!rec && job.status === 'completed' && !(await kvGet(env.DB, `pushsync:${job.id}`))) {
     await kvSet(env.DB, `pushsync:${job.id}`, 1);
-    ctx.waitUntil(runSync(env, { force: true }));
+    await requestSync(env);
     return reply('started');
   }
   return reply('skipped');

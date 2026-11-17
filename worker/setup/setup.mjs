@@ -159,7 +159,7 @@ const config = {
   d1_databases: [{ binding: 'DB', database_name: D1_NAME, database_id: db.uuid, migrations_dir: 'migrations' }],
   send_email: [{ name: 'EMAIL' }],
   ratelimits: [{ name: 'LOGIN_LIMITER', namespace_id: String(A.ratelimit_namespace || 1001), simple: { limit: 10, period: 60 } }],
-  triggers: { crons: ['*/15 * * * *'] }, limits: { cpu_ms: 120000 }, observability: { enabled: true }
+  triggers: { crons: ['* * * * *'] }, limits: { cpu_ms: 120000 }, observability: { enabled: true }
 };
 writeFileSync(CONFIG, '// Written by setup/setup.mjs for "' + NAME + '". Re-run setup to change it.\n' + JSON.stringify(config, null, 2) + '\n');
 say('  wrote ' + CONFIG.slice(APP.length + 1));

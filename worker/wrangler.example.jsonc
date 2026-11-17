@@ -33,7 +33,7 @@
   "d1_databases": [{ "binding": "DB", "database_name": "watchbox", "database_id": "from: wrangler d1 create watchbox", "migrations_dir": "migrations" }],
   "send_email": [{ "name": "EMAIL" }],
   "ratelimits": [{ "name": "LOGIN_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
-  "triggers": { "crons": ["*/15 * * * *"] },
+  "triggers": { "crons": ["* * * * *"] },
   "limits": { "cpu_ms": 120000 },
   "observability": { "enabled": true }
 }

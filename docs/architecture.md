@@ -16,7 +16,9 @@ range from the storage host and passes it through. Posters come from TMDB's CDN 
 
 ## The library sync
 
-Every 15 minutes (and right after a download lands) the Worker:
+Every 15 minutes, and within a minute of a finished copy, a landed YouTube video or *Sync now*, the Worker runs the
+sync from its cron (which checks every minute for a pending request; webhooks only ask for a sync, because work a
+webhook starts is cut off about 30 seconds after it replies). One sync runs at a time. It:
 
 1. finishes download-pipeline steps a webhook missed, and hands waiting YouTube jobs to the box,
 2. reads `list.php` and compares it with the database: new files are added, moved files keep their id, deleted ones

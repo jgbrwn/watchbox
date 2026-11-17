@@ -56,10 +56,10 @@ test('rsync webhook requires a valid signature and syncs once per job', async ()
   const kv = new Map();
   const DB = { prepare: sql => ({ bind: (...a) => ({
     first: async () => (sql.startsWith('SELECT') && kv.has(a[0]) ? { value: kv.get(a[0]) } : null),
-    run: async () => { kv.set(a[0], a[1] ?? '1'); }
+    run: async () => { if (sql.includes("'sync_requested'")) syncs++; else kv.set(a[0], a[1] ?? '1'); }
   }) }) };
   const env = { RSYNC_WEBHOOK_SECRET: 'fixture-secret', DB };
-  let syncs = 0; const ctx = { waitUntil: () => { syncs++; } };
+  let syncs = 0; const ctx = { waitUntil: () => {} };   // the hook only asks for a sync; the cron runs it
   const body = JSON.stringify({ id: 7, status: 'completed', exit_code: 0, destination: 'storage:media/movies/' });
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('fixture-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const sig = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)))].map(b => b.toString(16).padStart(2, '0')).join('');

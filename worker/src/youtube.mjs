@@ -255,15 +255,13 @@ export async function refreshJobs(env) {
   return { copied };
 }
 
-/** After the box finished something: sync the library if a video landed, then mark it added. */
+/** After the box finished something: if a video landed, ask for a sync (the cron runs it within a minute and then
+ *  marks the video added). */
 export async function afterBox(env) {
   const r = await refreshJobs(env);
   if (r.copied) {
-    const { runSync } = await import('./cron.mjs');
-    await runSync(env, { force: true });
-    await refreshJobs(env);
-    const { refreshRequests } = await import('./requests.mjs');
-    await refreshRequests(env);
+    const { requestSync } = await import('./cron.mjs');
+    await requestSync(env);
   }
   return r;
 }

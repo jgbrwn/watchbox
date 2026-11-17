@@ -2,7 +2,7 @@
 import { handleJellyfin, json } from './jellyfin.mjs';
 import { imageTag } from './dto.mjs';
 import { streamVideo, streamSubtitle, serveImage } from './media.mjs';
-import { runSync } from './cron.mjs';
+import { runSync, requestSync, takeSyncRequest, lockSync, unlockSync } from './cron.mjs';
 import { handleAdmin } from './admin.mjs';
 import { lookupSession } from './auth.mjs';
 import { toolForHost, handleToolHost } from './tools.mjs';
@@ -12,7 +12,7 @@ import { handlePortal } from './portal.mjs';
 import { handlePlaySrc } from './player.mjs';
 import { handleShare } from './shares.mjs';
 import { refreshRequests } from './requests.mjs';
-import { handleYoutubeHook, afterBox } from './youtube.mjs';
+import { handleYoutubeHook, refreshJobs } from './youtube.mjs';
 import { configure } from './config.mjs';
 
 const CORS = {
@@ -111,18 +111,38 @@ export default {
   },
   async scheduled(event, env, ctx) {
     configure(env);
-    // Download pipeline fallback first (finish copies whose webhook was missed, send finished
-    // downloads), then the library sync. Sequential so two syncs never overlap.
-    ctx.waitUntil((async () => {
-      try { console.log('pipeline', JSON.stringify([await finishPending(env), await autoPipeline(env)])); }
-      catch (e) { console.error('pipeline', e.message); }
-      try { const y = await afterBox(env); if (y.copied) console.log('youtube', JSON.stringify(y)); }   // missed hooks; hand over waiting jobs
-      catch (e) { console.error('youtube', e.message); }
-      console.log('sync', JSON.stringify(await runSync(env)));
-      try { const n = await refreshRequests(env); if (n) console.log('requests available', n); }
-      catch (e) { console.error('requests', e.message); }
-      try { const p = await purgeOldTrash(env); if (p) console.log('trash', JSON.stringify(p)); }
-      catch (e) { console.error('trash', e.message); }
-    })());
+    // Every minute: run a sync someone asked for (finished copy, YouTube video, "Sync now").
+    // Every 15 minutes: the pipeline fallback and a full sync even if nobody asked.
+    const full = new Date(event.scheduledTime || Date.now()).getUTCMinutes() % 15 === 0;
+    ctx.waitUntil(tick(env, full));
   }
 };
+
+async function tick(env, full) {
+  if (full) {
+    // Finish copies whose webhook was missed, send finished downloads.
+    try { console.log('pipeline', JSON.stringify([await finishPending(env), await autoPipeline(env)])); }
+    catch (e) { console.error('pipeline', e.message); }
+    // YouTube: missed hooks, hand over waiting jobs (asks for a sync when a video landed).
+    try { const y = await refreshJobs(env); if (y.copied) { console.log('youtube', JSON.stringify(y)); await requestSync(env); } }
+    catch (e) { console.error('youtube', e.message); }
+  }
+  const requested = await takeSyncRequest(env);
+  if (!full && !requested) return;
+  if (!(await lockSync(env))) {             // a sync is still running: try again next minute
+    if (requested) await requestSync(env);
+    return;
+  }
+  try {
+    console.log('sync', JSON.stringify(await runSync(env, { force: requested })));
+    try { await refreshJobs(env); } catch (e) { console.error('youtube', e.message); }   // marks landed videos as added
+    try { const n = await refreshRequests(env); if (n) console.log('requests available', n); }
+    catch (e) { console.error('requests', e.message); }
+    if (full) {
+      try { const p = await purgeOldTrash(env); if (p) console.log('trash', JSON.stringify(p)); }
+      catch (e) { console.error('trash', e.message); }
+    }
+  } finally {
+    await unlockSync(env);
+  }
+}

@@ -3,7 +3,7 @@
 import { cfg } from './config.mjs';
 import { handleYoutubeAdmin } from './youtube.mjs';
 import { verifyAccessJwt } from './access.mjs';
-import { runSync } from './cron.mjs';
+import { requestSync } from './cron.mjs';
 import { tools, launchUrl } from './tools.mjs';
 import { handlePipeline, storage } from './pipeline.mjs';
 import { handleManage } from './manage.mjs';
@@ -128,7 +128,7 @@ export async function handleAdmin(request, env, ctx) {
   if (request.method === 'POST') {
     const form = await request.formData();
     if (path === '/admin/sync') {
-      ctx.waitUntil(runSync(env, { force: true }));
+      await requestSync(env);
     } else if (path === '/admin/override') {
       const key = String(form.get('key') || '').trim();
       const raw = String(form.get('tmdb') || '').trim();
@@ -137,7 +137,7 @@ export async function handleAdmin(request, env, ctx) {
         const m = /(\d+)\s*$/.exec(raw.replace(/\/$/, '').replace(/-.*$/, ''));   // accepts an id or a TMDB URL
         cur[key] = raw === '' || raw === 'none' ? null : Number(m?.[1] || raw.replace(/\D/g, ''));
         await env.DB.prepare("INSERT OR REPLACE INTO kv(key,value) VALUES ('overrides', ?)").bind(JSON.stringify(cur)).run();
-        ctx.waitUntil(runSync(env, { force: true }));
+        await requestSync(env);
       }
     }
     return Response.redirect(url.origin + '/admin?done=' + (path === '/admin/sync' ? 'sync' : 'fix') + '#library', 303);
@@ -180,7 +180,7 @@ export async function handleAdmin(request, env, ctx) {
   const library = `
 <div class=wsearch><input type=search id=wq placeholder="Watch something: search movies and shows…" autocomplete=off aria-label="Search the library to watch"></div>
 <div id=wres class=wgrid></div>
-${done ? `<div class=toast role=status>${done === 'sync' ? 'Sync started. New and changed files appear within a minute.' : 'Saved. Re-matching now; it shows up in your apps within a minute.'}</div>` : ''}
+${done ? `<div class=toast role=status>${done === 'sync' ? 'Sync requested. It starts within a minute; new files appear about a minute after that.' : 'Saved. Re-matching within a minute; it shows up in your apps a minute or two later.'}</div>` : ''}
 <section class=stats>
   ${stat((count.Movie || 0).toLocaleString(), 'Movies')}
   ${stat((count.Series || 0).toLocaleString(), 'Shows')}
