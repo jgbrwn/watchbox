@@ -9,6 +9,7 @@ import { Tmdb } from './library/tmdb.mjs';
 import * as yt from './youtube.mjs';
 import { cfg } from './config.mjs';
 import { getJson, storage } from './pipeline.mjs';
+import { onTheBox } from './dupes.mjs';
 import { randomHex } from './passwords.mjs';
 import { ageOf, pickMovieCert, pickTvCert } from './ages.mjs';
 import { sendEmail, portalUrl } from './users.mjs';
@@ -177,7 +178,13 @@ export async function createRequest(env, user, b) {
   const date = d.release_date || d.first_air_date || '';
   const row = { id: randomHex(12), title: d.title || d.name, year: date ? Number(date.slice(0, 4)) : null, poster: img(d.poster_path) };
   // Someone else already asked: join their request's progress.
-  const other = await db.prepare(`SELECT status, reply, torrent_hash, torrent_name FROM requests WHERE kind = ? AND tmdb_id = ? AND yt_id = '' AND status IN ('approved','sent')`).bind(kind, tmdbId).first();
+  let other = await db.prepare(`SELECT status, reply, torrent_hash, torrent_name FROM requests WHERE kind = ? AND tmdb_id = ? AND yt_id = '' AND status IN ('approved','sent')`).bind(kind, tmdbId).first();
+  // Already on the download box (from Find or another route): follow that download instead of starting another.
+  let box = null;
+  if (!other) {
+    box = (await onTheBox(env, kind, tmdbId).catch(() => []))[0] || null;
+    if (box) other = { status: 'sent', reply: null, torrent_hash: box.hash, torrent_name: box.name };
+  }
   const t = now();
   await db.prepare(`INSERT INTO requests(id, user_id, kind, tmdb_id, title, year, poster, note, status, reply, torrent_hash, torrent_name, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(row.id, user.id, kind, tmdbId, row.title, row.year, row.poster, String(b.note || '').trim().slice(0, 500) || null,
@@ -226,6 +233,11 @@ export async function decide(env, b) {
   }
   if (b.action === 'auto') {
     if (kind !== 'movie') return { status: 400, body: { error: 'Shows are found by hand (Find tab).' } };
+    const box = (await onTheBox(env, kind, tmdbId).catch(() => []))[0];
+    if (box) {   // already downloading (or downloaded) on the box: follow it
+      await setTitle(db, k, { status: 'sent', torrent_hash: box.hash, torrent_name: box.name, reply });
+      return { status: 200, body: { ok: true, name: box.name + ' (already on the download box)' } };
+    }
     const r = await autoDownload(env, tmdbId);
     if (r.error) return { status: 502, body: { error: r.error } };
     await setTitle(db, k, { status: 'sent', torrent_hash: r.hash, torrent_name: r.name, reply });

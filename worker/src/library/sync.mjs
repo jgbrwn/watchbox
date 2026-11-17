@@ -198,10 +198,10 @@ async function ensureSeries(db, tmdb, id) {
   return JSON.parse(r.seasons);
 }
 
-async function lookup(db, key) {
+export async function lookup(db, key) {
   return db.prepare('SELECT tmdb_id, note, manual FROM lookups WHERE key=?').bind(key).first();
 }
-async function saveLookup(db, key, kind, id, note) {
+export async function saveLookup(db, key, kind, id, note) {
   await db.prepare('INSERT INTO lookups(key,kind,tmdb_id,note,manual,at) VALUES (?,?,?,?,0,?) ON CONFLICT(key) DO UPDATE SET tmdb_id=excluded.tmdb_id, note=excluded.note, at=excluded.at WHERE lookups.manual=0')
     .bind(key, kind, id, note, now()).run();
 }

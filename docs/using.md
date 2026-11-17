@@ -30,6 +30,19 @@ admin page (Library → the unmatched list's TMDB form, or paste a TMDB link for
 | Pipeline | requests from guests, YouTube (videos and playlists), finished downloads with **Send to library**, downloads in progress, copy history, auto-send and cleanup settings |
 | Find · Downloads · Transfer | the download box's c-cli, qBittorrent (VueTorrent) and rsync-web, if you have one |
 
+### Duplicates
+
+watchbox checks for titles you already have at three points. It warns rather than refuses, since a second copy can
+be an upgrade (a better rip, a higher resolution):
+
+- **Find:** search results and title pages are marked *In library · 1080p* (shows: which seasons) or *Downloading now*,
+  matched by IMDb id, and downloading one of them asks *Download anyway?* first.
+- **Auto-send:** a finished download that's a movie you already have, or a season pack whose episodes are all in the
+  library, isn't sent automatically. Pipeline marks it *⚠ Duplicate* with **Send anyway** and **Remove from box**.
+  Packs that add new episodes are sent as usual (with a note of how many you had).
+- **Requests:** asking for a title that is already downloading on the box (or approving such a request) follows that
+  download instead of starting another one; the people who asked are emailed when it's in the library.
+
 ## Guests (`/me`)
 
 Invite someone on Users: they get an email with a link, sign in to `/me` with a one-time code sent to that email,

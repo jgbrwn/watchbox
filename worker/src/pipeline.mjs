@@ -12,6 +12,7 @@ import { requestSync, scanOnly } from './cron.mjs';
 import { VIDEO_EXT } from './library/parse.mjs';
 import { originHeaders } from './origin.mjs';
 import { cfg } from './config.mjs';
+import { duplicateCheck } from './dupes.mjs';
 
 // rsync-web presets configured on the box (-preset, see app/freebsd/rsync_web) and where they land in the library.
 const PRESET = { movie: 'Movies', tv: 'TV' };
@@ -118,9 +119,24 @@ export async function autoPipeline(env) {
     const name = readyName(t);
     if (!name || await kvGet(env.DB, `pushed:${t.hash}`)) continue;
     if (space && space.total - space.used < t.size + 50e9) { started.push({ name, skipped: `${cfg().storageName} is nearly full` }); continue; }
+    // Already in the library (another copy of the movie, or every episode of the pack)? Leave it for the owner:
+    // the Pipeline tab shows it with "Send anyway" (it may be an upgrade) and "Remove from box".
+    let dup = await kvGet(env.DB, `dup:${t.hash}`);
+    if (!dup) {
+      try { dup = (await duplicateCheck(env, t, name)) || { none: true }; } catch (e) { dup = null; }
+      if (dup) await kvSet(env.DB, `dup:${t.hash}`, dup);
+    }
+    if (dup?.all) { started.push({ name, skipped: 'already in the library: ' + (dup.title || '') }); continue; }
     const r = await startPush(env, { name, kind: guessKind(name), hash: t.hash, auto: true });
     started.push(r.error ? { name, error: r.error } : { name, job: r.data.job });
     if (started.length >= 3) break;
+  }
+  // Forget duplicate checks of torrents that are gone from the box.
+  const all = await getJson(env, 'dl', '/api/v2/torrents/info');
+  if (Array.isArray(all.data)) {
+    const live = new Set(all.data.map(t => t.hash));
+    const stale = (await env.DB.prepare("SELECT key FROM kv WHERE key LIKE 'dup:%' OR key LIKE 'ident:%'").all()).results.map(r => r.key).filter(k => !live.has(k.split(':')[1]));
+    for (const k of stale) await env.DB.prepare('DELETE FROM kv WHERE key = ?').bind(k).run();
   }
   return { started };
 }
@@ -215,11 +231,13 @@ export async function handlePipeline(request, env, ctx, path) {
       ratio: t.ratio, seeding_time: t.seeding_time
     })) : [];
     const items = [];
+    const dups = new Map((await db.prepare("SELECT key, value FROM kv WHERE key LIKE 'dup:%'").all()).results.map(r => [r.key.slice(4), JSON.parse(r.value)]));
     for (const e of media.data || []) {
       const lib = await db.prepare("WITH n(v) AS (SELECT ?) SELECT count(*) n, sum(missing_since IS NULL) live FROM files, n WHERE (path = n.v OR substr(path, 1, length(n.v) + 1) = n.v || '/') AND kind IN ('movie','episode')").bind(e.name).first();
       const torrent = torrents.find(t => readyName(t) === e.name || t.name === e.name);
       items.push({ name: e.name, is_dir: e.is_dir, size: e.is_dir ? torrent?.size ?? null : e.size, kind: guessKind(e.name), in_library: lib?.live || 0, hash: torrent?.hash || null,
-        ratio: torrent?.ratio ?? null, seeding_time: torrent?.seeding_time ?? null, upspeed: torrent?.upspeed || 0 });
+        ratio: torrent?.ratio ?? null, seeding_time: torrent?.seeding_time ?? null, upspeed: torrent?.upspeed || 0,
+        dup: torrent && dups.get(torrent.hash)?.note ? dups.get(torrent.hash) : null });
     }
     const recs = Object.fromEntries((await db.prepare("SELECT key, value FROM kv WHERE key LIKE 'push:%'").all()).results.map(r => [r.key.slice(5), JSON.parse(r.value)]));
     const jobs = Array.isArray(hist.data) ? hist.data.slice(0, 15).map(h => ({
@@ -279,6 +297,7 @@ export async function handlePipeline(request, env, ctx, path) {
     const { hash } = await request.json().catch(() => ({}));
     if (!/^[0-9a-f]{40}$/.test(hash || '')) return json({ error: 'bad hash' }, 400);
     const r = await qbPost(env, '/api/v2/torrents/delete', `hashes=${hash}&deleteFiles=true`);
+    if (!r.error) await db.prepare("DELETE FROM kv WHERE key IN (?, ?)").bind('dup:' + hash, 'ident:' + hash).run();
     return r.error ? json({ error: r.error }, 502) : json({ ok: true });
   }
 

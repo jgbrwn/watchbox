@@ -132,6 +132,16 @@ export async function handleToolHost(request, env, tool) {
     return page(502, `${tool.name}: credential rejected`, 'Caddy rejected the Worker credential (TOOLS_AUTHORIZATION).');
 
   let out = new Response(res.body, res);
+  // Find (c-cli): mark search results you already have or are downloading (src/dupes.mjs). Best effort.
+  if (tool.id === 'cc' && request.method === 'GET' && res.status === 200 && /^\/api\/(search|movie\/|omdb)/.test(url.pathname) &&
+      (res.headers.get('Content-Type') || '').includes('json')) {
+    try {
+      const { annotateFind } = await import('./dupes.mjs');
+      const data = await annotateFind(env, url.pathname, await out.clone().json());
+      const hs = new Headers(res.headers); hs.delete('Content-Length'); hs.delete('Content-Encoding');
+      out = new Response(JSON.stringify(data), { status: 200, headers: hs });
+    } catch (e) { console.error('find annotate', e.message); }
+  }
   // First-visit defaults for the tool's own settings (e.g. VueTorrent's theme). Never overwrites a choice.
   if (tool.storage_defaults && typeof HTMLRewriter !== 'undefined' && request.method === 'GET' && (out.headers.get('Content-Type') || '').includes('text/html')) {
     const js = `try{for(const[k,v]of Object.entries(${JSON.stringify(tool.storage_defaults).replace(/</g, '\\u003c')}))if(localStorage.getItem(k)===null)localStorage.setItem(k,v)}catch(e){}`;

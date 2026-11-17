@@ -504,7 +504,8 @@ async function refresh() {
     if (d.storage && d.storage.box) $('#f-dl').textContent += ' · ' + Math.round((d.storage.box.total - d.storage.box.used) / 2 ** 30) + ' GB free';
     const active = d.torrents.filter(t => t.progress < 1);
     $('#f-dl').textContent = active.length ? active.length + ' downloading' + (d.transfer && d.transfer.dl ? ' · ' + speed(d.transfer.dl) : '') : 'Nothing downloading';
-    $('#f-ready').textContent = d.items.filter(i => !i.in_library).length + ' waiting to send';
+    const dupN = d.items.filter(i => !i.in_library && i.dup && i.dup.all).length;
+    $('#f-ready').textContent = d.items.filter(i => !i.in_library).length + ' waiting to send' + (dupN ? ' · ' + dupN + ' duplicate' + (dupN > 1 ? 's' : '') : '');
     $('#f-sync').textContent = 'Library synced ' + ago(d.last_sync);
     $('#pready-n').textContent = d.items.length || '';
     const running = new Set(d.jobs.filter(j => j.status === 'running').map(j => j.source));
@@ -513,10 +514,11 @@ async function refresh() {
       return '<div class=card data-name="' + esc(i.name) + '"><div class=name>' + esc(i.name) + '</div><div class=meta>' +
         (i.size ? '<span>' + size(i.size) + '</span>' : '') +
         (i.in_library ? '<span class=good>✓ In library · ' + i.in_library + ' video' + (i.in_library > 1 ? 's' : '') + '</span>' : '<span>Not in library yet</span>') +
-        (busy ? '<span class=status>copying…</span>' : (!i.in_library && i.hash && d.settings.auto ? '<span>sending automatically…</span>' : '')) +
+        (!i.in_library && i.dup ? '<span class=' + (i.dup.all ? 'bad' : 'muted') + ' title="Matched as ' + esc(i.dup.title || '') + '">' + (i.dup.all ? '⚠ Duplicate: ' : '') + esc(i.dup.note) + (i.dup.all && i.dup.title ? ' (' + esc(i.dup.title) + ')' : '') + (i.dup.all ? ' · not sent automatically' : '') + '</span>' : '') +
+        (busy ? '<span class=status>copying…</span>' : (!i.in_library && i.hash && d.settings.auto && !(i.dup && i.dup.all) ? '<span>sending automatically…</span>' : '')) +
         (i.in_library && i.hash && i.ratio != null ? '<span>seeding · ratio ' + i.ratio.toFixed(2) + ' of ' + d.settings.seed_ratio + ' · ' + Math.floor(i.seeding_time / 3600) + ' of ' + d.settings.seed_hours + ' h' + (i.upspeed ? ' · ↑ ' + speed(i.upspeed) : '') + (d.settings.cleanup ? ' · removed after' : '') + '</span>' : '') + '</div><div class=row>' +
         '<select aria-label="Library for ' + esc(i.name) + '"><option value=movie' + (i.kind === 'movie' ? ' selected' : '') + '>Movie</option><option value=tv' + (i.kind === 'tv' ? ' selected' : '') + '>TV show</option></select>' +
-        '<button data-act=push' + (busy ? ' disabled' : '') + (i.in_library ? ' class=quiet' : '') + '>' + (i.in_library ? 'Send again' : 'Send to library') + '</button>' +
+        '<button data-act=push' + (busy ? ' disabled' : '') + (i.in_library ? ' class=quiet' : '') + '>' + (i.in_library ? 'Send again' : i.dup && i.dup.all ? 'Send anyway' : 'Send to library') + '</button>' +
         (i.hash ? '<button class=quiet data-act=remove data-hash=' + i.hash + '>Remove from box</button>' : '') +
         '</div></div>';
     }).join('') || '<p class=hint>Nothing waiting. Finished downloads show up here.</p>';
