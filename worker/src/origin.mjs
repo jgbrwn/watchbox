@@ -11,9 +11,17 @@ export function originHeaders(env, extra = {}) {
 }
 
 export async function fetchListing(env, fetchImpl = fetch) {
-  const res = await fetchImpl(env.ORIGIN_BASE_URL.replace(/\/?$/, '/') + 'list.php', { headers: originHeaders(env) });
-  if (!res.ok) throw new Error(`listing HTTP ${res.status}`);
-  const data = await res.json();
+  let data;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchImpl(env.ORIGIN_BASE_URL.replace(/\/?$/, '/') + 'list.php', { headers: originHeaders(env) });
+    if (!res.ok) throw new Error(`listing HTTP ${res.status}`);
+    const text = await res.text();
+    try { data = JSON.parse(text); break; } catch {
+      // a cut-off response (connection dropped mid-body): try once more, then say what happened
+      if (attempt < 1) { await new Promise(r => setTimeout(r, 2000)); continue; }
+      throw new Error(`listing: incomplete JSON (${text.length} bytes)`);
+    }
+  }
   if (!data || !Array.isArray(data.files) || !data.roots) throw new Error('listing malformed');
   return data;
 }

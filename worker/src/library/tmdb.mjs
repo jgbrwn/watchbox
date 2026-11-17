@@ -28,7 +28,11 @@ export class Tmdb {
         await sleep(Math.min(wait, 10_000)); continue;
       }
       if (!res.ok) throw new Error(`TMDB ${res.status} ${path}`);
-      return res.json();
+      const text = await res.text();
+      try { return JSON.parse(text); } catch {
+        if (attempt < 4) { await sleep(500 * 2 ** attempt); continue; }   // cut-off response: retry
+        throw new Error(`TMDB incomplete JSON ${path} (${text.length} bytes)`);
+      }
     }
   }
 

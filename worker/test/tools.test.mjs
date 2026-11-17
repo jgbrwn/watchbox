@@ -90,3 +90,18 @@ test('seeding goal: ratio or hours, whichever comes first', () => {
   assert.equal(seedState({ ratio: 0.1, seeding_time: 72 * 3600 }, s).done, true);
   assert.equal(seedState({ ratio: 0, seeding_time: 0 }, { seed_ratio: 0, seed_hours: 0 }).done, true);
 });
+
+// A cut-off response from the storage host or TMDB is retried, and named if it keeps happening.
+import { fetchListing as _fetchListing } from '../src/origin.mjs';
+import { Tmdb as _Tmdb } from '../src/library/tmdb.mjs';
+test('incomplete JSON from the listing or TMDB is retried', async () => {
+  const env = { ORIGIN_BASE_URL: 'https://o.example/', ORIGIN_AUTHORIZATION: 'Basic x' };
+  let n = 0;
+  const flaky = async () => new Response(n++ === 0 ? '{"files":[' : '{"files":[],"roots":{}}');
+  const data = await _fetchListing(env, flaky);
+  assert.deepEqual(data.files, []);
+  await assert.rejects(_fetchListing(env, async () => new Response('{"fi')), /listing: incomplete JSON \(4 bytes\)/);
+  let m = 0;
+  const t = new _Tmdb('tok', { fetchImpl: async () => new Response(m++ === 0 ? '' : '{"id":1}') });
+  assert.deepEqual(await t.get('/movie/1'), { id: 1 });
+});
