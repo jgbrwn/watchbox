@@ -5,16 +5,22 @@
 //   library and removes them from the box (push with remove_source) -> check they're in the library -> skip them, pick
 //   the next batch, recheck (so the torrent no longer offers the removed files) and start again -> ... -> remove the torrent.
 // A file that alone is bigger than the free space can't be done this way: the torrent is stopped and shown as too big.
-// While other downloads still need the space, a torrent waits (stopped) for its next batch.
+// Torrents that need space wait in a queue, in the order they started waiting (`queued_at`). Each minute the queue is
+// looked at oldest first, and each torrent that starts a part reserves that space for the ones after it, so two never
+// count on the same free space. A smaller part may go ahead of an older one that doesn't fit yet, but once the oldest
+// has waited HOLD and would fit when other downloads leave the box, nothing else in the queue starts until it does.
+// Only this minute check starts parts (also the next part of a pack once a copy is done), so the order holds.
 // Batched torrents don't seed once their files have left the box.
 //
 // State per torrent in kv `batch:<hash>`: { hash, name, kind, step, current: [file index], sent: [file index], ... }
-//   step: downloading | sending | waiting | too_big | error | done
+//   step: downloading | sending | next (part sent, queued for the next) | waiting | too_big | error | done
+//   waiting: will fit once other downloads leave the box; too_big: wouldn't fit even then.
 import { getJson, kvGet, kvSet, guessKind, readyName } from './pipeline.mjs';
 import { VIDEO_EXT } from './library/parse.mjs';
 import { cfg } from './config.mjs';
 
 export const MARGIN = 5e9;          // always leave this much free on the box
+export const HOLD = 12 * 3600;      // after this long at the head of the queue, the oldest waiting torrent goes first
 const now = () => Math.floor(Date.now() / 1000);
 const qbPost = (env, path, body) => getJson(env, 'dl', path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
 const gb = n => (n / 1e9).toFixed(n < 10e9 ? 1 : 0) + ' GB';
@@ -46,7 +52,7 @@ export function planBatch(files, sent, budget) {
     if (used + n <= budget) { chosen.push(f.i); used += n; }
   }
   const oversize = todo.filter(f => left(f) > budget).map(f => ({ name: String(f.name).split('/').pop(), size: left(f) }));
-  return { chosen, bytes: used, remaining: todo.length, largest: Math.max(0, ...todo.map(left)), oversize };
+  return { chosen, bytes: used, remaining: todo.length, largest: Math.max(0, ...todo.map(left)), smallest: Math.min(...todo.map(left)), oversize };
 }
 
 const activeDl = t => t.progress < 1 && !/^(stopped|paused)/i.test(t.state || '') && !/error|missing/i.test(t.state || '');
@@ -66,8 +72,9 @@ export async function batchTick(env) {
     if (!byHash.has(h) && (b.step !== 'done' || now() - b.at > 86400)) { await db.prepare('DELETE FROM kv WHERE key = ?').bind('batch:' + h).run(); recs.delete(h); }
   }
   const fresh = info.data.filter(t => activeDl(t) && t.total_size > 0 && !recs.has(t.hash) && !/meta/i.test(t.state || ''));
-  // Waiting for space, or left with a file too big for the space: looked at again whenever the free space has grown.
-  const waiting = [...recs.values()].filter(b => b.step === 'waiting' || b.step === 'too_big');
+  // The queue: waiting for space (or too big for it, looked at again whenever the free space grows), or ready for the next part.
+  const QUEUED = ['waiting', 'too_big', 'next'];
+  const waiting = [...recs.values()].filter(b => QUEUED.includes(b.step));
   const ready = [...recs.values()].filter(b => b.step === 'downloading' && readyName(byHash.get(b.hash)));
   if (!fresh.length && !waiting.length && !ready.length) return { idle: true };
 
@@ -81,50 +88,60 @@ export async function batchTick(env) {
 
   const free = await boxFree(env);
   if (free == null) return { out, error: 'box free space unknown' };
-  const leftOf = new Map(info.data.filter(activeDl).map(t => [t.hash, t.amount_left || 0]));
+  const leftOf = new Map(info.data.filter(activeDl).map(t => [t.hash, t.amount_left || 0]));   // space still to be written
   const othersLeft = hash => [...leftOf].reduce((s, [h, n]) => h === hash ? s : s + n, 0);
+  // What other downloads hold on the box now (freed when they're sent, or removed after seeding).
+  const reclaim = hash => info.data.reduce((s, t) => t.hash === hash ? s : s + (t.completed || 0), 0);
 
-  // Waiting torrents first (oldest first), then new ones, biggest first.
-  waiting.sort((a, b) => a.at - b.at);
+  // The queue, oldest first, then new downloads that don't fit, biggest first.
+  waiting.sort((a, b) => (a.queued_at || a.at) - (b.queued_at || b.at));
   fresh.sort((a, b) => (b.amount_left || 0) - (a.amount_left || 0));
+  const head = waiting.find(b => b.step !== 'too_big' && byHash.has(b.hash));
+  let hold = head && now() - (head.queued_at || head.at) > HOLD ? head : null;
   for (const t of [...waiting.map(b => byHash.get(b.hash)).filter(Boolean), ...fresh]) {
     const b = recs.get(t.hash);
     const budget = free - MARGIN - othersLeft(t.hash);
     if (!b && (t.amount_left || 0) <= budget) continue;            // fits: nothing to do
-    if (b?.step === 'too_big' && budget <= (b.budget || 0) + 1e9) continue;   // no more room than last time
+    if ((b?.step === 'too_big' || b?.step === 'waiting') && budget <= (b.budget || 0) + 1e9 && !hold) continue;   // no more room than last time
     const files = await getJson(env, 'dl', `/api/v2/torrents/files?hash=${t.hash}`);
     if (!Array.isArray(files.data) || !files.data.length) continue;
     const rec = b || { hash: t.hash, name: t.name, kind: guessKind(t.name), sent: [], sent_bytes: 0, files: files.data.length,
       total: files.data.reduce((s, f) => s + f.size, 0), batches: 0, started: now() };
-    const r = await startBatch(env, rec, files.data, budget, othersLeft(t.hash) > 0, free);
-    leftOf.set(t.hash, r.bytes || 0);
-    if (!(r.bytes > 0)) leftOf.delete(t.hash);
+    const r = await startBatch(env, rec, files.data, budget, { free, reclaim: reclaim(t.hash), held: hold && hold.hash !== t.hash ? hold : null });
+    if (r.bytes > 0) leftOf.set(t.hash, r.bytes); else leftOf.delete(t.hash);
+    if (hold && hold.hash === t.hash && r.bytes > 0) hold = null;  // the oldest got its space: the rest may follow
     out.push({ name: t.name, step: rec.step, files: r.chosen?.length });
   }
   return { out };
 }
 
-/** Selects the next batch (or stops the torrent to wait, or marks it too big) and saves the record. */
-async function startBatch(env, rec, files, budget, othersBusy, free) {
+/** Selects the next batch, or stops the torrent and queues it (waiting / too big), and saves the record.
+ *  ctx: { free, reclaim: bytes other downloads hold on the box, held: the queue's oldest torrent when it goes first } */
+async function startBatch(env, rec, files, budget, { free, reclaim = 0, held = null }) {
   const plan = planBatch(files, rec.sent, budget);
   rec.at = now();
   if (!plan.remaining) return { bytes: 0 };
   const usable = gb(Math.max(0, budget));
   const big = plan.oversize.length === 1 ? `${plan.oversize[0].name} (${gb(plan.oversize[0].size)})` : `${plan.oversize.length} files (up to ${gb(plan.largest)})`;
-  if (!plan.chosen.length) {
+  if (!plan.chosen.length || held) {
     await qbStop(env, rec.hash);
-    rec.budget = budget;
-    if (othersBusy) { rec.step = 'waiting'; rec.note = `Waiting for other downloads to free space (next file ${gb(plan.largest)}, ${usable} usable now)`; }
-    else if (rec.sent.length) { rec.step = 'too_big'; rec.note = `Everything else is sent. ${big} doesn’t fit (${usable} usable): it continues if space frees up, or Remove from box.`; }
-    else { rec.step = 'too_big'; rec.note = `Too big for the box: ${big}, ${usable} usable. It continues if space frees up; or Remove from box and pick a smaller release.`; }
+    if (held) delete rec.budget; else rec.budget = budget;          // held ones are looked at again as soon as the hold ends
+    rec.queued_at = rec.queued_at || now();
+    rec.need = plan.smallest;                                        // the least space that lets it go on
+    const reachable = free - MARGIN + reclaim;                       // once other downloads leave the box
+    if (held) { rec.step = 'waiting'; rec.note = `Queued behind ${held.name}, which has waited longest for space`; }
+    else if (rec.need <= reachable) { rec.step = 'waiting'; rec.note = `Waiting for other downloads to leave the box: next file ${gb(rec.need)}, ${usable} usable now`; }
+    else if (rec.sent.length) { rec.step = 'too_big'; rec.note = `Everything else is sent. ${big} doesn’t fit, even once other downloads leave the box (${gb(Math.max(0, reachable))}). It continues if space frees up, or Remove from box.`; }
+    else { rec.step = 'too_big'; rec.note = `Too big for the box: ${big}, ${gb(Math.max(0, reachable))} at most once other downloads leave. It continues if space frees up; or Remove from box and pick a smaller release.`; }
     await kvSet(env.DB, 'batch:' + rec.hash, rec);
     return { bytes: 0 };
   }
+  delete rec.queued_at; delete rec.budget; delete rec.need;
   const chosen = new Set(plan.chosen);
   const all = files.map(fileIndex);
   await setPrio(env, rec.hash, all.filter(i => !chosen.has(i)), 0);
   await setPrio(env, rec.hash, plan.chosen, 1);
-  if (rec.batches > 0 || rec.step === 'waiting' || rec.step === 'too_big') {
+  if (rec.batches > 0 || rec.step === 'waiting' || rec.step === 'too_big' || rec.step === 'next') {
     // The removed files' pieces are still marked as had; a recheck clears that before peers ask for them.
     await qbPost(env, '/api/v2/torrents/recheck', 'hashes=' + rec.hash);
   }
@@ -189,13 +206,11 @@ export async function batchSent(env, pushRec, status) {
     await kvSet(env.DB, 'batch:' + rec.hash, rec);
     return { done: true };
   }
-  const free = await boxFree(env);
-  const info = await getJson(env, 'dl', '/api/v2/torrents/info');
-  const othersLeft = (info.data || []).filter(t => t.hash !== rec.hash && activeDl(t)).reduce((s, t) => s + (t.amount_left || 0), 0);
-  if (free == null) { rec.step = 'waiting'; await kvSet(env.DB, 'batch:' + rec.hash, rec); return { waiting: true }; }
-  rec.step = 'sending-next';
-  const r = await startBatch(env, rec, files.data, free - MARGIN - othersLeft, othersLeft > 0, free);
-  return { next: r.chosen?.length || 0 };
+  // The next part is started by the minute check, in queue order with any other torrent waiting for space.
+  rec.step = 'next'; rec.queued_at = now(); rec.at = now();
+  rec.note = `Part ${rec.batches} sent (${gb(rec.sent_bytes)} of ${gb(rec.total)}); next part within a minute`;
+  await kvSet(env.DB, 'batch:' + rec.hash, rec);
+  return { next: true };
 }
 
 /** For the Pipeline tab. */

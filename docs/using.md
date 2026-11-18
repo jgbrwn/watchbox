@@ -60,6 +60,8 @@ The download box only needs room for part of a download:
   Pipeline marks it *too big*, with **Remove from box**. It carries on by itself if space frees up later. Otherwise pick
   a smaller release (for example x265 instead of a remux). Find only knows a torrent's total size, so this shows up
   once the download has started.
+- Several downloads waiting for space take turns in the order they started waiting. A smaller one can go ahead in
+  the meantime, but nothing jumps the queue past a download that has waited 12 hours.
 - Guest requests that download automatically pick the best release that fits.
 
 ## Guests (`/me`)

@@ -63,7 +63,11 @@ and when they finish it stops the torrent and has rsync-web copy them with `remo
 `--remove-source-files`). It then checks they're in the library at the same size, skips them, selects the next batch,
 rechecks the torrent (so it no longer offers the removed files to peers) and starts it again. After the last batch the
 torrent is removed. A file bigger than the free space is skipped while the others are done. When nothing else is left, the
-torrent is stopped and marked too big, and it's looked at again whenever the free space grows.
+torrent is stopped and marked too big, and it's looked at again whenever the free space grows. Torrents waiting for space
+form a queue in the order they started waiting. Once a minute it's looked at oldest first, and each part that starts
+reserves its space for the ones after it, so two downloads never count on the same free space. A smaller part may go
+ahead of an older one that doesn't fit yet. But once the oldest has waited 12 hours, and would fit when other downloads
+leave the box, nothing else in the queue starts until it has its space.
 Batched torrents don't seed once their files have left the box.
 
 ## Where state lives

@@ -17,36 +17,50 @@ const envFor = d => ({ DB: d, TMDB_TOKEN: 't', TOOLS_AUTHORIZATION: 'Basic eDp5'
   TOOLS: { dl: { name: 'qBittorrent', upstream: 'https://dl.box.example' }, rs: { name: 'rsync-web', upstream: 'https://rs.box.example' } } });
 
 // A stand-in download box: qBittorrent's Web API and rsync-web, with a disk that fills and empties.
-function fakeBox({ free, files }) {
-  const box = { free, calls: [], pushes: [], torrent: null };
-  const name = 'Show.S01.2160p';
-  box.torrent = { hash: H, name, state: 'downloading', progress: 0, total_size: files.reduce((s, f) => s + f.size, 0), content_path: '/home/freebsd/media/temp/' + name };
-  box.files = files.map((f, i) => ({ index: i, name: name + '/' + f.name, size: f.size, progress: 0, priority: 1 }));
-  const left = () => box.files.reduce((s, f) => s + (f.priority ? f.size * (1 - f.progress) : 0), 0);
-  box.finishBatch = () => {   // qBittorrent downloads the selected files and moves the torrent out of temp
-    for (const f of box.files) if (f.priority && f.progress < 1) { box.free -= f.size * (1 - f.progress); f.progress = 1; }
-    Object.assign(box.torrent, { progress: 1, state: 'stalledUP', content_path: '/home/freebsd/media/' + name });
+// torrents: [{ hash, name, files: [{ name, size }], seeding: true (finished, holding its size on disk) }]
+function fakeBox({ free, files, torrents }) {
+  const box = { free, calls: [], pushes: [], ts: new Map() };
+  box.add = spec => {
+    const name = spec.name;
+    const t = { hash: spec.hash, name, state: spec.seeding ? 'stalledUP' : 'downloading', progress: spec.seeding ? 1 : 0,
+      total_size: spec.files.reduce((s, f) => s + f.size, 0), content_path: '/home/freebsd/media/' + (spec.seeding ? '' : 'temp/') + name };
+    const fs = spec.files.map((f, i) => ({ index: i, name: name + '/' + f.name, size: f.size, progress: spec.seeding ? 1 : 0, priority: 1 }));
+    box.ts.set(spec.hash, { t, files: fs });
+    if (!spec.seeding) box.free -= 0;   // nothing written yet
   };
+  for (const spec of torrents || [{ hash: H, name: 'Show.S01.2160p', files }]) box.add(spec);
+  Object.defineProperty(box, 'torrent', { get: () => box.ts.get(H)?.t || null });
+  Object.defineProperty(box, 'files', { get: () => box.ts.get(H)?.files || [] });
+  const left = e => e.files.reduce((s, f) => s + (f.priority ? f.size * (1 - f.progress) : 0), 0);
+  const completed = e => e.files.reduce((s, f) => s + (f.priority && !f.gone ? f.size * f.progress : 0), 0);
+  box.finishBatch = (hash = H) => {   // qBittorrent downloads the selected files and moves the torrent out of temp
+    const e = box.ts.get(hash);
+    for (const f of e.files) if (f.priority && f.progress < 1) { box.free -= f.size * (1 - f.progress); f.progress = 1; }
+    Object.assign(e.t, { progress: 1, state: 'stalledUP', content_path: '/home/freebsd/media/' + e.t.name });
+  };
+  box.state = hash => box.ts.get(hash).t.state;
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url), body = new URLSearchParams(typeof init.body === 'string' ? init.body : '');
     const j = v => new Response(JSON.stringify(v), { headers: { 'Content-Type': 'application/json' } });
+    const e = box.ts.get(u.searchParams.get('hash') || body.get('hash') || body.get('hashes'));
     box.calls.push(u.pathname);
-    if (u.pathname === '/api/v2/torrents/info') return j(box.torrent ? [{ ...box.torrent, amount_left: left() }] : []);
-    if (u.pathname === '/api/v2/torrents/files') return j(box.files);
+    if (u.pathname === '/api/v2/torrents/info') return j([...box.ts.values()].map(e => ({ ...e.t, amount_left: left(e), completed: completed(e) })));
+    if (u.pathname === '/api/v2/torrents/files') return j(e.files);
     if (u.pathname === '/api/v2/torrents/filePrio') {
-      for (const id of body.get('id').split('|')) box.files[Number(id)].priority = Number(body.get('priority'));
-      if (box.files.some(f => f.priority && f.progress < 1)) Object.assign(box.torrent, { progress: 0.5, state: 'stoppedDL' });
+      for (const id of body.get('id').split('|')) e.files[Number(id)].priority = Number(body.get('priority'));
+      if (e.files.some(f => f.priority && f.progress < 1)) Object.assign(e.t, { progress: 0.5, state: 'stoppedDL' });
       return new Response('');
     }
-    if (u.pathname === '/api/v2/torrents/stop') { box.torrent.state = box.torrent.progress < 1 ? 'stoppedDL' : 'stoppedUP'; return new Response(''); }
-    if (u.pathname === '/api/v2/torrents/start') { box.torrent.state = 'downloading'; return new Response(''); }
+    if (u.pathname === '/api/v2/torrents/stop') { e.t.state = e.t.progress < 1 ? 'stoppedDL' : 'stoppedUP'; return new Response(''); }
+    if (u.pathname === '/api/v2/torrents/start') { e.t.state = 'downloading'; return new Response(''); }
     if (u.pathname === '/api/v2/torrents/recheck') return new Response('');
-    if (u.pathname === '/api/v2/torrents/delete') { box.torrent = null; return new Response(''); }
+    if (u.pathname === '/api/v2/torrents/delete') { box.ts.delete(body.get('hashes')); return new Response(''); }
     if (u.pathname.startsWith('/api/job/')) return j({ history: { status: 'completed', options: JSON.stringify(box.oldRsync ? ['-r'] : ['-r', '--remove-source-files']) } });
     if (u.pathname === '/api/status') return j({ disk_total: 72 * GB, disk_free: box.free });
     if (u.pathname === '/api/push') {
       const p = JSON.parse(init.body); box.pushes.push(p);
-      if (p.remove_source) for (const f of box.files) if (f.priority && f.progress === 1 && !f.gone) { f.gone = true; box.free += f.size; }
+      const e = [...box.ts.values()].find(e => e.t.name === p.name);
+      if (p.remove_source && e) for (const f of e.files) if (f.priority && f.progress === 1 && !f.gone) { f.gone = true; box.free += f.size; }
       return j({ id: 100 + box.pushes.length });
     }
     return new Response('nope', { status: 404 });
@@ -78,9 +92,11 @@ test('a pack with one file bigger than the free space: the rest is sent, that on
   rec = await kvGet(d, 'batch:' + H);
   inLibrary(d, box, rec.current);
   await batchSent(env, await kvGet(d, 'push:' + rec.job), 'completed');
+  assert.equal((await kvGet(d, 'batch:' + H)).step, 'next');
+  await batchTick(env);
   rec = await kvGet(d, 'batch:' + H);
   assert.equal(rec.step, 'too_big');
-  assert.match(rec.note, /^Everything else is sent\. E02\.mkv \(60 GB\) doesn’t fit \(45 GB usable\)/);
+  assert.match(rec.note, /^Everything else is sent\. E02\.mkv \(60 GB\) doesn’t fit, even once other downloads leave the box \(45 GB\)/);
   assert.match(box.torrent.state, /^stopped/);
   const calls = box.calls.length;
   await batchTick(env);                                            // no more room: not even looked at
@@ -120,7 +136,10 @@ test('a 90 GB pack on a box with 50 GB free: three parts, each sent and removed,
     const r = await batchSent(env, push, 'completed');
     rec = await kvGet(d, 'batch:' + H);
     if (part < 3) {
-      assert.equal(r.next, 1);
+      assert.equal(r.next, true);
+      assert.equal(rec.step, 'next');                              // the minute check starts the next part
+      await batchTick(env);
+      rec = await kvGet(d, 'batch:' + H);
       assert.equal(rec.step, 'downloading');
       assert.equal(box.files[part].priority, 1);
       assert.equal(box.files[part - 1].priority, 0);
@@ -163,7 +182,7 @@ test('one file bigger than the free space: the torrent is stopped as too big; to
   await batchTick(env);
   const rec = await kvGet(d, 'batch:' + H);
   assert.equal(rec.step, 'too_big');
-  assert.match(rec.note, /Too big for the box: Movie\.2160p\.mkv \(80 GB\), 45 GB usable/);
+  assert.match(rec.note, /Too big for the box: Movie\.2160p\.mkv \(80 GB\), 45 GB at most once other downloads leave/);
   assert.equal(box.torrent.state, 'stoppedDL');
 
   const d2 = db();
@@ -171,6 +190,66 @@ test('one file bigger than the free space: the torrent is stopped as too big; to
   await batchTick(envFor(d2));
   assert.equal(await kvGet(d2, 'batch:' + H), null);
   assert.equal(box.calls.includes('/api/v2/torrents/filePrio'), false);
+});
+
+test('the queue: two packs never count on the same space, and they take turns', async () => {
+  const d = db(), env = envFor(d);
+  const A = 'b'.repeat(40), B = 'c'.repeat(40);
+  const pack = (hash, name) => ({ hash, name, files: [{ name: 'E01.mkv', size: 30 * GB }, { name: 'E02.mkv', size: 30 * GB }] });
+  const box = fakeBox({ free: 50 * GB, torrents: [pack(A, 'A.S01'), pack(B, 'B.S01')] });
+  await batchTick(env);
+  const step = async h => (await kvGet(d, 'batch:' + h)).step;
+  // 45 GB usable: one 30 GB part, not two.
+  assert.deepEqual([await step(A), await step(B)].sort(), ['downloading', 'waiting']);
+  const first = (await step(A)) === 'downloading' ? A : B, second = first === A ? B : A;
+  assert.match((await kvGet(d, 'batch:' + second)).note, /Waiting for other downloads to leave the box: next file 30 GB/);
+  // The first sends its part; the one that waited goes next, the first waits its turn.
+  box.finishBatch(first); await batchTick(env);
+  const rec = await kvGet(d, 'batch:' + first);
+  inLibrary(d, box, []);
+  d.raw.prepare(`INSERT INTO files(id,root,path,library,kind,size,mtime,match_key,match_status,added_at) VALUES ('x', ?, ?, 'tv', 'episode', ?, 0, 'k', 'pending', 0)`)
+    .run(cfg().primary.tv, box.ts.get(first).files[rec.current[0]].name, 30 * GB);
+  await batchSent(env, await kvGet(d, 'push:' + rec.job), 'completed');
+  await batchTick(env);
+  assert.equal(await step(second), 'downloading');
+  assert.equal(await step(first), 'waiting');
+});
+
+test('the queue: the oldest waiting torrent goes first once it has waited long enough', async () => {
+  const d = db(), env = envFor(d);
+  const A = 'b'.repeat(40), B = 'c'.repeat(40), S = 'd'.repeat(40);
+  // A seeding download holds 30 GB; 30 GB usable. A needs a 40 GB file: it fits once the seeding one leaves.
+  const box = fakeBox({ free: 35 * GB, torrents: [{ hash: S, name: 'Seeding', seeding: true, files: [{ name: 'm.mkv', size: 30 * GB }] },
+    { hash: A, name: 'A.S01', files: [{ name: 'E01.mkv', size: 40 * GB }, { name: 'E02.mkv', size: 40 * GB }] }] });
+  await batchTick(env);
+  let a = await kvGet(d, 'batch:' + A);
+  assert.equal(a.step, 'waiting');
+  const pack20 = { hash: B, name: 'B.S01', files: [{ name: 'E01.mkv', size: 20 * GB }, { name: 'E02.mkv', size: 20 * GB }] };
+  // Not waited long: a smaller part may go ahead.
+  box.add(pack20);
+  await batchTick(env);
+  assert.equal((await kvGet(d, 'batch:' + B)).step, 'downloading');
+  // Start over with A at the head of the queue for 13 hours: B is held behind it.
+  const d2 = db(), env2 = envFor(d2);
+  const box2 = fakeBox({ free: 35 * GB, torrents: [{ hash: S, name: 'Seeding', seeding: true, files: [{ name: 'm.mkv', size: 30 * GB }] },
+    { hash: A, name: 'A.S01', files: [{ name: 'E01.mkv', size: 40 * GB }, { name: 'E02.mkv', size: 40 * GB }] }] });
+  await batchTick(env2);
+  a = await kvGet(d2, 'batch:' + A);
+  a.queued_at -= 13 * 3600;
+  d2.raw.prepare('UPDATE kv SET value = ? WHERE key = ?').run(JSON.stringify(a), 'batch:' + A);
+  box2.add(pack20);
+  await batchTick(env2);
+  let b = await kvGet(d2, 'batch:' + B);
+  assert.equal(b.step, 'waiting');
+  assert.match(b.note, /Queued behind A\.S01/);
+  assert.match(box2.state(B), /^stopped/);
+  // The seeding download is removed (60 GB usable): A gets its 40 GB first, then B its 20 GB from what's left.
+  box2.ts.delete(S); box2.free += 30 * GB;
+  await batchTick(env2);
+  assert.equal((await kvGet(d2, 'batch:' + A)).step, 'downloading');
+  b = await kvGet(d2, 'batch:' + B);
+  assert.equal(b.step, 'downloading');
+  assert.deepEqual(b.current.length, 1);
 });
 
 test('Find: torrents bigger than the free space get a box_note; requests pick a release that fits', async () => {
