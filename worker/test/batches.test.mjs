@@ -252,6 +252,17 @@ test('the queue: the oldest waiting torrent goes first once it has waited long e
   assert.deepEqual(b.current.length, 1);
 });
 
+test('several downloads that each fit but not together: the biggest waits, the rest go on', async () => {
+  const d = db(), env = envFor(d);
+  const hs = ['e', 'f', 'g'].map(c => c.repeat(40));
+  const box = fakeBox({ free: 50 * GB, torrents: hs.map((h, i) => ({ hash: h, name: 'Movie' + i, files: [{ name: 'm.mkv', size: (20 + i) * GB }] })) });
+  await batchTick(env);
+  const steps = await Promise.all(hs.map(async h => (await kvGet(d, 'batch:' + h))?.step || null));
+  assert.deepEqual(steps, [null, null, 'waiting']);                // 20 + 21 fit in 45 GB; the 22 GB one waits
+  assert.match(box.state(hs[2]), /^stopped/);
+  assert.equal(box.state(hs[0]), 'downloading');
+});
+
 test('Find: torrents bigger than the free space get a box_note; requests pick a release that fits', async () => {
   const d = db(), env = envFor(d);
   fakeBox({ free: 50 * GB, files: [{ name: 'x.mkv', size: 1 }] });
