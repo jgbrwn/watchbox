@@ -525,18 +525,21 @@ async function refresh() {
         (i.size ? '<span>' + size(i.size) + '</span>' : '') +
         (i.in_library ? '<span class=good>✓ In library · ' + i.in_library + ' video' + (i.in_library > 1 ? 's' : '') + '</span>' : '<span>Not in library yet</span>') +
         (!i.in_library && i.dup ? '<span class=' + (i.dup.all ? 'bad' : 'muted') + ' title="Matched as ' + esc(i.dup.title || '') + '">' + (i.dup.all ? '⚠ Duplicate: ' : '') + esc(i.dup.note) + (i.dup.all && i.dup.title ? ' (' + esc(i.dup.title) + ')' : '') + (i.dup.all ? ' · not sent automatically' : '') + '</span>' : '') +
-        (busy ? '<span class=status>copying…</span>' : (!i.in_library && i.hash && d.settings.auto && !(i.dup && i.dup.all) ? '<span>sending automatically…</span>' : '')) +
+        (i.batch ? '<span class=' + (/too_big|error/.test(i.batch.step) ? 'bad' : 'status') + '>' + esc(i.batch.note || '') + '</span>' :
+        busy ? '<span class=status>copying…</span>' : (!i.in_library && i.hash && d.settings.auto && !(i.dup && i.dup.all) ? '<span>sending automatically…</span>' : '')) +
         (i.in_library && i.hash && i.ratio != null ? '<span>seeding · ratio ' + i.ratio.toFixed(2) + ' of ' + d.settings.seed_ratio + ' · ' + Math.floor(i.seeding_time / 3600) + ' of ' + d.settings.seed_hours + ' h' + (i.upspeed ? ' · ↑ ' + speed(i.upspeed) : '') + (d.settings.cleanup ? ' · removed after' : '') + '</span>' : '') + '</div><div class=row>' +
         '<select aria-label="Library for ' + esc(i.name) + '"><option value=movie' + (i.kind === 'movie' ? ' selected' : '') + '>Movie</option><option value=tv' + (i.kind === 'tv' ? ' selected' : '') + '>TV show</option></select>' +
-        '<button data-act=push' + (busy ? ' disabled' : '') + (i.in_library ? ' class=quiet' : '') + '>' + (i.in_library ? 'Send again' : i.dup && i.dup.all ? 'Send anyway' : 'Send to library') + '</button>' +
+        '<button data-act=push' + (busy || i.batch ? ' disabled' : '') + (i.in_library ? ' class=quiet' : '') + '>' + (i.in_library ? 'Send again' : i.dup && i.dup.all ? 'Send anyway' : 'Send to library') + '</button>' +
         (i.hash ? '<button class=quiet data-act=remove data-hash=' + i.hash + '>Remove from box</button>' : '') +
         '</div></div>';
     }).join('') || '<p class=hint>Nothing waiting. Finished downloads show up here.</p>';
-    $('#ptorrents').innerHTML = active.map(t => '<div class=card><div class=name>' + esc(t.name) + '</div><div class=prog><i style="width:' + (t.progress * 100).toFixed(1) + '%"></i></div><div class=meta><span>' + (t.progress * 100).toFixed(1) + '%</span><span>' + size(t.size) + '</span>' + (speed(t.dlspeed) ? '<span>' + speed(t.dlspeed) + '</span>' : '') + (t.eta > 0 && t.eta < 8640000 ? '<span>' + (t.eta > 5400 ? Math.round(t.eta / 3600) + ' h' : Math.max(1, Math.round(t.eta / 60)) + ' min') + ' left</span>' : '') + '<span>' + esc(t.state) + '</span></div></div>').join('') || '<p class=hint>Nothing downloading.</p>';
+    $('#ptorrents').innerHTML = active.map(t => '<div class=card data-name="' + esc(t.name) + '"><div class=name>' + esc(t.name) + '</div><div class=prog><i style="width:' + (t.progress * 100).toFixed(1) + '%"></i></div><div class=meta><span>' + (t.progress * 100).toFixed(1) + '%</span><span>' + size(t.size) + '</span>' + (speed(t.dlspeed) ? '<span>' + speed(t.dlspeed) + '</span>' : '') + (t.eta > 0 && t.eta < 8640000 ? '<span>' + (t.eta > 5400 ? Math.round(t.eta / 3600) + ' h' : Math.max(1, Math.round(t.eta / 60)) + ' min') + ' left</span>' : '') + '<span>' + esc(t.state) + '</span>' +
+      (t.batch ? '<span class=' + (/too_big|error/.test(t.batch.step) ? 'bad' : 'status') + '>' + esc(t.batch.note || '') + (t.batch.sent ? ' · ' + t.batch.sent + ' of ' + t.batch.files + ' files sent' : '') + '</span>' : '') + '</div>' +
+      (t.batch && /too_big|error|waiting/.test(t.batch.step) ? '<div class=row><button class=quiet data-act=remove data-hash=' + t.hash + '>Remove from box</button></div>' : '') + '</div>').join('') || '<p class=hint>Nothing downloading.</p>';
     $('#pjobs').innerHTML = d.jobs.slice(0, 8).map(j => {
       if (j.status === 'running') watching.add(j.id);
       return '<div class=card><div class=name>' + esc(j.source === 'media/' ? 'Everything in ~/media' : j.source.replace(/^media[/]/, '')) + '</div><div class=meta><span class="status ' + esc(j.status) + '">' + esc(j.status) + '</span>' + (j.auto ? '<span class=tag>auto</span>' : '') + '<span>→ ' + esc(j.destination) + '</span><span>' + esc((j.created_at || '').replace('T', ' ').slice(0, 16)) + '</span>' +
-        (j.cleanup ? (j.cleanup.removed ? '<span class=good>✓ removed from box</span>' : j.cleanup.waiting ? '<span>seeding, then removed</span>' : j.cleanup.gone ? '<span>removed by hand</span>' : '<span class=bad title="' + esc(j.cleanup.error) + '">kept on box: ' + esc(j.cleanup.error) + '</span>') : '') + '</div><pre id=job' + j.id + ' hidden></pre></div>';
+        (j.cleanup ? (j.cleanup.done ? '<span class=good>✓ last part sent, removed from box</span>' : j.cleanup.next != null ? '<span class=good>✓ part sent, removed from box</span>' : j.cleanup.retry ? '<span>part failed, retrying</span>' : j.cleanup.skipped ? '' : j.cleanup.removed ? '<span class=good>✓ removed from box</span>' : j.cleanup.waiting ? '<span>seeding, then removed</span>' : j.cleanup.gone ? '<span>removed by hand</span>' : '<span class=bad title="' + esc(j.cleanup.error) + '">kept on box: ' + esc(j.cleanup.error) + '</span>') : '') + '</div><pre id=job' + j.id + ' hidden></pre></div>';
     }).join('') || '<p class=hint>No copies yet.</p>';
     for (const id of watching) pollJob(id);
   } catch (e) { $('#perr').innerHTML = '<div class=note>Couldn’t load the pipeline: ' + esc(e.message) + '</div>'; }
@@ -551,7 +554,7 @@ async function pollJob(id) {
   } catch {}
 }
 
-$('#pready').addEventListener('click', async ev => {
+const pipeClick = async ev => {
   const b = ev.target.closest('button'); if (!b) return;
   const card = b.closest('.card'), name = card.dataset.name;
   try {
@@ -565,7 +568,9 @@ $('#pready').addEventListener('click', async ev => {
     }
   } catch (e) { alert(e.message); b.disabled = false; }
   refresh();
-});
+};
+$('#pready').addEventListener('click', pipeClick);
+$('#ptorrents').addEventListener('click', pipeClick);
 for (const k of ['seed_ratio', 'seed_hours']) $('#s-' + k).addEventListener('change', async ev => {
   try { await api('settings', { [k]: Number(ev.target.value) }); } catch (e) { alert(e.message); }
   refresh();

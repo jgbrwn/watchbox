@@ -68,13 +68,15 @@ export async function searchTitles(env, q, userId) {
 
 const sizeBytes = s => { const m = /([\d.]+)\s*(GB|MB)/i.exec(s || ''); return m ? Number(m[1]) * (m[2].toUpperCase() === 'GB' ? 1e9 : 1e6) : 0; };
 
-export function pickTorrent(movies, imdb) {
+// maxBytes: what fits on the download box; the best release that fits wins (a 720p rather than nothing).
+export function pickTorrent(movies, imdb, maxBytes = Infinity) {
   const m = (movies || []).find(x => x.imdb_code === imdb);
   if (!m) return null;
   const quality = { '1080p': 0, '720p': 1, '2160p': 2 };
   const ts = (m.torrents || []).filter(t => t.hash && t.seeds > 0 && t.quality in quality);
   ts.sort((a, b) => quality[a.quality] - quality[b.quality] || (a.type === 'bluray' ? 0 : 1) - (b.type === 'bluray' ? 0 : 1) || b.seeds - a.seeds);
-  return ts[0] ? { movie: m, torrent: ts[0] } : null;
+  const fits = ts.find(t => sizeBytes(t.size) <= maxBytes);
+  return ts[0] ? { movie: m, torrent: fits || ts[0], fits: !!fits } : null;
 }
 
 export async function autoDownload(env, tmdbId) {
@@ -83,12 +85,12 @@ export async function autoDownload(env, tmdbId) {
   if (!imdb) return { error: 'TMDB has no IMDb id for it, so no automatic download.' };
   const s = await getJson(env, 'cc', `/api/search?q=${encodeURIComponent(imdb)}&source=yts`);
   if (s.error) return { error: 'Couldn’t search for a download (' + s.error + ').' };
-  const pick = pickTorrent(s.data?.results, imdb);
+  const space = await storage(env);
+  const pick = pickTorrent(s.data?.results, imdb, space.box ? (space.box.total - space.box.used - 5e9) / 1.1 : Infinity);
   if (!pick) return { error: 'No download with seeders was found automatically.' };
   const size = sizeBytes(pick.torrent.size);
-  const space = await storage(env);
   if (space.store && space.store.total - space.store.used < size + 50e9) return { error: `${cfg().storageName} is nearly full.` };
-  if (space.box && space.box.total - space.box.used < size * 1.1 + 5e9) return { error: 'The download box is nearly full.' };
+  if (!pick.fits) return { error: `The download box doesn’t have room for it right now (${(size / 1e9).toFixed(1)} GB).` };
   const title = `${pick.movie.title} (${pick.movie.year})`;
   const r = await getJson(env, 'cc', `/api/download?url=${encodeURIComponent(pick.torrent.url)}&title=${encodeURIComponent(title)}&quality=${encodeURIComponent(pick.torrent.quality)}`);
   if (r.error) return { error: 'Couldn’t start the download (' + r.error + ').' };

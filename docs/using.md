@@ -47,6 +47,18 @@ be an upgrade (a better rip, a higher resolution):
 - **Requests:** asking for a title that is already downloading on the box (or approving such a request) follows that
   download instead of starting another one; the people who asked are emailed when it's in the library.
 
+### Big downloads
+
+The download box only needs room for part of a download:
+
+- **Find** marks torrents bigger than the box's free space and asks before *⬇ Server* downloads one.
+- A pack of many files (a season, a complete series) that doesn't fit is **downloaded in parts**: as many files as
+  fit, sent to the library and removed from the box, then the next ones. Pipeline shows the progress
+  (*part 2 … · 8 of 20 files sent*). Episodes show up in the library part by part. These downloads don't seed afterwards.
+- A single file bigger than the free space can't be split. The download is stopped and Pipeline marks it *too big*,
+  with **Remove from box**. Pick a smaller release (for example x265 instead of a remux).
+- Guest requests that download automatically pick the best release that fits.
+
 ## Guests (`/me`)
 
 Invite someone on Users: they get an email with a link, sign in to `/me` with a one-time code sent to that email,

@@ -9,6 +9,7 @@ import { matchKeyFor, lookup, saveLookup } from './library/sync.mjs';
 import { findMovie, findSeries } from './library/match.mjs';
 import { Tmdb } from './library/tmdb.mjs';
 import { guessKind, getJson, kvGet, kvSet } from './pipeline.mjs';
+import { boxFree, sizeNote } from './batches.mjs';
 
 /** "1080p" etc. from a probed file's video stream (by width, so 1920x800 scope films still count as 1080p). */
 export function quality(probe) {
@@ -129,8 +130,28 @@ export async function duplicateCheck(env, t, name) {
 
 // ---------- Find (c-cli) ----------
 
-/** Adds `library_note` / `library_state` ("have" | "downloading") to c-cli's JSON for /api/search, /api/movie/<id>, /api/omdb. */
+/** "1.95 GB" / "980 MB" / size_bytes -> bytes. */
+export function torrentBytes(t) {
+  if (t?.size_bytes > 0) return Number(t.size_bytes);
+  const m = /([\d.]+)\s*([KMGT])i?B/i.exec(t?.size || '');
+  return m ? Number(m[1]) * { K: 1e3, M: 1e6, G: 1e9, T: 1e12 }[m[2].toUpperCase()] : 0;
+}
+
+/** Adds `box_note` to torrents bigger than the download box's free space (c-cli shows it and asks before downloading). */
+async function annotateSizes(env, path, data) {
+  const ts = [];
+  if (path.startsWith('/api/search') && Array.isArray(data?.results)) for (const r of data.results) { if (Array.isArray(r.torrents)) ts.push(...r.torrents); else ts.push(r); }
+  else if (path.startsWith('/api/movie/') && Array.isArray(data?.torrents)) ts.push(...data.torrents);
+  const sized = ts.filter(t => t && typeof t === 'object' && torrentBytes(t) > 0);
+  if (!sized.length) return;
+  const free = await boxFree(env);
+  for (const t of sized) { const n = sizeNote(torrentBytes(t), free); if (n) t.box_note = n; }
+}
+
+/** Adds `library_note` / `library_state` ("have" | "downloading") to c-cli's JSON for /api/search, /api/movie/<id>, /api/omdb,
+ *  and `box_note` to torrents that don't fit on the download box. */
 export async function annotateFind(env, path, data) {
+  try { await annotateSizes(env, path, data); } catch (e) { console.error('find sizes', e.message); }
   const db = env.DB;
   const targets = [];   // [object, imdb id]
   const add = (o, imdb) => { if (o && /^tt\d+$/.test(imdb || '')) targets.push([o, imdb]); };

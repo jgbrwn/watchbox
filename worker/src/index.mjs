@@ -7,6 +7,7 @@ import { handleAdmin } from './admin.mjs';
 import { lookupSession } from './auth.mjs';
 import { toolForHost, handleToolHost } from './tools.mjs';
 import { handleRsyncHook, handleQbitHook, autoPipeline, finishPending } from './pipeline.mjs';
+import { batchTick } from './batches.mjs';
 import { purgeOldTrash } from './manage.mjs';
 import { handlePortal } from './portal.mjs';
 import { handlePlaySrc } from './player.mjs';
@@ -127,6 +128,9 @@ async function tick(env, full) {
     try { const y = await refreshJobs(env); if (y.copied) { console.log('youtube', JSON.stringify(y)); await requestSync(env); } }
     catch (e) { console.error('youtube', e.message); }
   }
+  // Downloads bigger than the box's free space (src/batches.mjs): checked every minute, since a download can fill the disk fast.
+  try { const b = await batchTick(env); if (!b.idle) console.log('batches', JSON.stringify(b)); }
+  catch (e) { console.error('batches', e.message); }
   const requested = await takeSyncRequest(env);
   if (!full && !requested) return;
   if (!(await lockSync(env))) {             // a sync is still running: try again next minute

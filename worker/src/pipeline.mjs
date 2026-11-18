@@ -13,6 +13,7 @@ import { VIDEO_EXT } from './library/parse.mjs';
 import { originHeaders } from './origin.mjs';
 import { cfg } from './config.mjs';
 import { duplicateCheck } from './dupes.mjs';
+import { batchSent, batchStates, batchTick } from './batches.mjs';
 
 // rsync-web presets configured on the box (-preset, see app/freebsd/rsync_web) and where they land in the library.
 const PRESET = { movie: 'Movies', tv: 'TV' };
@@ -117,7 +118,7 @@ export async function autoPipeline(env) {
   const space = (await storage(env)).store;
   for (const t of qb.data || []) {
     const name = readyName(t);
-    if (!name || await kvGet(env.DB, `pushed:${t.hash}`)) continue;
+    if (!name || await kvGet(env.DB, `pushed:${t.hash}`) || await kvGet(env.DB, `batch:${t.hash}`)) continue;   // batches: src/batches.mjs
     if (space && space.total - space.used < t.size + 50e9) { started.push({ name, skipped: `${cfg().storageName} is nearly full` }); continue; }
     // Already in the library (another copy of the movie, or every episode of the pack)? Leave it for the owner:
     // the Pipeline tab shows it with "Send anyway" (it may be an upgrade) and "Remove from box".
@@ -180,14 +181,17 @@ export async function finishPush(env, jobId, status, { sync = true } = {}) {
   if (!rec || rec.finished || (rec.claimed && now() - rec.claimed < 300)) return rec;
   rec.claimed = now();
   await kvSet(env.DB, key, rec);
-  if (status === 'completed') {
+  if (rec.batch) {                                                   // one part of a download in parts (src/batches.mjs)
+    if (status === 'completed') await scanOnly(env);
+    rec.cleanup = await batchSent(env, rec, status);
+  } else if (status === 'completed') {
     const settings = await getSettings(env.DB);
     if (settings.cleanup && rec.hash) {
       await scanOnly(env);
       const problem = await verifyOnHostbrr(env, rec);
       rec.cleanup = problem ? { error: problem } : await cleanupIfDone(env, rec, settings);
     }
-  } else if (rec.hash) {
+  } else if (rec.hash && !rec.batch) {
     await env.DB.prepare('DELETE FROM kv WHERE key=?').bind(`pushed:${rec.hash}`).run();   // allow a retry
   }
   rec.finished = now(); rec.status = status;
@@ -230,6 +234,8 @@ export async function handlePipeline(request, env, ctx, path) {
       eta: t.eta, num_seeds: t.num_seeds, added_on: t.added_on, completion_on: t.completion_on, content_path: t.content_path,
       ratio: t.ratio, seeding_time: t.seeding_time
     })) : [];
+    const batches = await batchStates(db);
+    for (const t of torrents) if (batches.has(t.hash)) t.batch = batches.get(t.hash);
     const items = [];
     const dups = new Map((await db.prepare("SELECT key, value FROM kv WHERE key LIKE 'dup:%'").all()).results.map(r => [r.key.slice(4), JSON.parse(r.value)]));
     for (const e of media.data || []) {
@@ -237,7 +243,7 @@ export async function handlePipeline(request, env, ctx, path) {
       const torrent = torrents.find(t => readyName(t) === e.name || t.name === e.name);
       items.push({ name: e.name, is_dir: e.is_dir, size: e.is_dir ? torrent?.size ?? null : e.size, kind: guessKind(e.name), in_library: lib?.live || 0, hash: torrent?.hash || null,
         ratio: torrent?.ratio ?? null, seeding_time: torrent?.seeding_time ?? null, upspeed: torrent?.upspeed || 0,
-        dup: torrent && dups.get(torrent.hash)?.note ? dups.get(torrent.hash) : null });
+        dup: torrent && dups.get(torrent.hash)?.note ? dups.get(torrent.hash) : null, batch: torrent?.batch || null });
     }
     const recs = Object.fromEntries((await db.prepare("SELECT key, value FROM kv WHERE key LIKE 'push:%'").all()).results.map(r => [r.key.slice(5), JSON.parse(r.value)]));
     const jobs = Array.isArray(hist.data) ? hist.data.slice(0, 15).map(h => ({
@@ -297,7 +303,7 @@ export async function handlePipeline(request, env, ctx, path) {
     const { hash } = await request.json().catch(() => ({}));
     if (!/^[0-9a-f]{40}$/.test(hash || '')) return json({ error: 'bad hash' }, 400);
     const r = await qbPost(env, '/api/v2/torrents/delete', `hashes=${hash}&deleteFiles=true`);
-    if (!r.error) await db.prepare("DELETE FROM kv WHERE key IN (?, ?)").bind('dup:' + hash, 'ident:' + hash).run();
+    if (!r.error) await db.prepare("DELETE FROM kv WHERE key IN (?, ?, ?)").bind('dup:' + hash, 'ident:' + hash, 'batch:' + hash).run();
     return r.error ? json({ error: r.error }, 502) : json({ ok: true });
   }
 
@@ -342,6 +348,6 @@ export async function handleRsyncHook(request, env, ctx) {
 export async function handleQbitHook(request, env, ctx) {
   const v = await verifySigned(request, env, 'X-Watch-Signature');
   if (v.res) return v.res;
-  ctx.waitUntil(autoPipeline(env).then(r => console.log('auto pipeline', JSON.stringify(r))));
+  ctx.waitUntil(batchTick(env).catch(e => ({ error: e.message })).then(b => autoPipeline(env).then(r => console.log('auto pipeline', JSON.stringify([b, r])))));
   return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
 }

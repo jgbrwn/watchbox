@@ -57,6 +57,14 @@ YouTube link → the Worker asks watch-stream → yt-dlp → files named <channe
 Nothing on the storage host is ever deleted by the pipeline; deleting is only through the admin page's Manage tab,
 into a trash you can restore from.
 
+**Downloads bigger than the box's free space** (`src/batches.mjs`, checked every minute): a torrent with many files is
+downloaded a batch at a time. The Worker selects the files that fit (qBittorrent file priorities, leaving 5 GB free),
+and when they finish it stops the torrent and has rsync-web copy them with `remove_source` (rsync
+`--remove-source-files`). It then checks they're in the library at the same size, skips them, selects the next batch,
+rechecks the torrent (so it no longer offers the removed files to peers) and starts it again. After the last batch the
+torrent is removed. A single file bigger than the free space can't be split: the torrent is stopped and marked too big.
+Batched torrents don't seed once their files have left the box.
+
 ## Where state lives
 
 | What | Where | Backed up by |
