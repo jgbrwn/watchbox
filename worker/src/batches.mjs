@@ -8,14 +8,15 @@
 // Torrents that need space wait in a queue, in the order they started waiting (`queued_at`). Each minute the queue is
 // looked at oldest first, and each torrent that starts a part reserves that space for the ones after it, so two never
 // count on the same free space. A smaller part may go ahead of an older one that doesn't fit yet, but once the oldest
-// has waited HOLD and would fit when other downloads leave the box, nothing else in the queue starts until it does.
+// has waited HOLD and would fit when other downloads leave the box, nothing else in the queue starts until it does, and
+// finished downloads that are still seeding (and are safely in the library) stop seeding early to make the room.
 // Only this minute check starts parts (also the next part of a pack once a copy is done), so the order holds.
 // Batched torrents don't seed once their files have left the box.
 //
 // State per torrent in kv `batch:<hash>`: { hash, name, kind, step, current: [file index], sent: [file index], ... }
 //   step: downloading | sending | next (part sent, queued for the next) | waiting | too_big | error | done
 //   waiting: will fit once other downloads leave the box; too_big: wouldn't fit even then.
-import { getJson, kvGet, kvSet, guessKind, readyName } from './pipeline.mjs';
+import { getJson, kvGet, kvSet, guessKind, readyName, endSeedingEarly } from './pipeline.mjs';
 import { VIDEO_EXT } from './library/parse.mjs';
 import { cfg } from './config.mjs';
 
@@ -111,6 +112,15 @@ export async function batchTick(env) {
     if (r.bytes > 0) leftOf.set(t.hash, r.bytes); else leftOf.delete(t.hash);
     if (hold && hold.hash === t.hash && r.bytes > 0) hold = null;  // the oldest got its space: the rest may follow
     out.push({ name: t.name, step: rec.step, files: r.chosen?.length });
+  }
+  // The oldest has waited HOLD and still has no room: end seeding early for downloads already in the library
+  // (most-seeded first) to free what it needs. It starts at the next check, once qBittorrent has deleted them.
+  if (hold) {
+    const short = (hold.need || 0) - (free - MARGIN - othersLeft(hold.hash));
+    if (short > 0) {
+      const r = await endSeedingEarly(env, short);
+      if (r.removed.length) out.push({ seeding_ended: r.removed, freed: r.freed, for: hold.name });
+    }
   }
   return { out };
 }

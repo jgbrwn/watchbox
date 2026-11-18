@@ -67,7 +67,9 @@ torrent is stopped and marked too big, and it's looked at again whenever the fre
 form a queue in the order they started waiting. Once a minute it's looked at oldest first, and each part that starts
 reserves its space for the ones after it, so two downloads never count on the same free space. A smaller part may go
 ahead of an older one that doesn't fit yet. But once the oldest has waited 12 hours, and would fit when other downloads
-leave the box, nothing else in the queue starts until it has its space.
+leave the box, nothing else in the queue starts until it has its space. Finished downloads that are safely in the
+library (most-seeded first) then stop seeding early to make that room. qBittorrent's "torrent added" hook runs this
+check as soon as a download is added, not only once a minute.
 Batched torrents don't seed once their files have left the box.
 
 ## Where state lives

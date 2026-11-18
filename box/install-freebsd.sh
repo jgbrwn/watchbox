@@ -119,6 +119,8 @@ if [ ! -f "$QB/qBittorrent.conf" ]; then
 [AutoRun]
 enabled=true
 program=@OPT@/bin/watch-torrent-done \"%I\"
+OnTorrentAdded\Enabled=true
+OnTorrentAdded\Program=@OPT@/bin/watch-torrent-done \"%I\" added
 
 [BitTorrent]
 Session\DefaultSavePath=@H@/media

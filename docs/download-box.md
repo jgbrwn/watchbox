@@ -73,6 +73,12 @@ On the admin page's **Pipeline** tab: *Send finished downloads automatically* co
 it from the box once every video file is confirmed on storage at the same size and after seeding to the ratio or hours
 you set. Nothing on storage is ever deleted. It refuses to send when the storage host has less than 50 GB free.
 
+qBittorrent runs `watch-torrent-done` when a torrent finishes, and when one is added (`watch-torrent-done "%I" added`),
+so the Worker checks straight away that everything downloading fits on the box (see [Big downloads](using.md#big-downloads)).
+Boxes installed before v0.1.6 only have the "finished" one: in qBittorrent's settings → Downloads → *Run external
+program on torrent added*, enter the same program with ` added` after `"%I"` (re-running the installer keeps your
+qBittorrent settings, so it doesn't add this).
+
 ## YouTube
 
 Paste a video or playlist link on the Pipeline tab (or approve a guest's request). The box downloads with yt-dlp

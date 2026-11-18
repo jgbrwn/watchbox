@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
 import { openLocalDb } from '../tools/local-db.mjs';
 import { planBatch, batchTick, batchSent, sizeNote } from '../src/batches.mjs';
-import { autoPipeline, kvGet } from '../src/pipeline.mjs';
+import { autoPipeline, kvGet, kvSet, handleQbitHook } from '../src/pipeline.mjs';
 import { annotateFind, torrentBytes } from '../src/dupes.mjs';
 import { pickTorrent } from '../src/requests.mjs';
 import { cfg } from '../src/config.mjs';
@@ -54,7 +54,10 @@ function fakeBox({ free, files, torrents }) {
     if (u.pathname === '/api/v2/torrents/stop') { e.t.state = e.t.progress < 1 ? 'stoppedDL' : 'stoppedUP'; return new Response(''); }
     if (u.pathname === '/api/v2/torrents/start') { e.t.state = 'downloading'; return new Response(''); }
     if (u.pathname === '/api/v2/torrents/recheck') return new Response('');
-    if (u.pathname === '/api/v2/torrents/delete') { box.ts.delete(body.get('hashes')); return new Response(''); }
+    if (u.pathname === '/api/v2/torrents/delete') {
+      for (const h of body.get('hashes').split('|')) { const e = box.ts.get(h); if (e) box.free += completed(e); box.ts.delete(h); }
+      return new Response('');
+    }
     if (u.pathname.startsWith('/api/job/')) return j({ history: { status: 'completed', options: JSON.stringify(box.oldRsync ? ['-r'] : ['-r', '--remove-source-files']) } });
     if (u.pathname === '/api/status') return j({ disk_total: 72 * GB, disk_free: box.free });
     if (u.pathname === '/api/push') {
@@ -261,6 +264,52 @@ test('several downloads that each fit but not together: the biggest waits, the r
   assert.deepEqual(steps, [null, null, 'waiting']);                // 20 + 21 fit in 45 GB; the 22 GB one waits
   assert.match(box.state(hs[2]), /^stopped/);
   assert.equal(box.state(hs[0]), 'downloading');
+});
+
+test('a download held up past 12 hours ends seeding early for finished downloads already in the library', async () => {
+  const d = db(), env = envFor(d);
+  const A = 'b'.repeat(40), S1 = 'd'.repeat(40), S2 = 'e'.repeat(40);
+  const seed = (hash, name) => ({ hash, name, seeding: true, files: [{ name: 'm.mkv', size: 20 * GB }] });
+  const box = fakeBox({ free: 25 * GB, torrents: [seed(S1, 'Old'), seed(S2, 'NotInLibrary'),
+    { hash: A, name: 'A.S01', files: [{ name: 'E01.mkv', size: 35 * GB }, { name: 'E02.mkv', size: 35 * GB }] }] });
+  box.ts.get(S1).t.ratio = 0.4; box.ts.get(S2).t.ratio = 0.9;
+  // Both finished downloads were sent and are seeding before removal; only Old is (verified) in the library.
+  await kvSet(d, 'push:1', { job: 1, name: 'Old', kind: 'movie', hash: S1, at: 0, finished: 1, cleanup: { waiting: true } });
+  await kvSet(d, 'push:2', { job: 2, name: 'NotInLibrary', kind: 'movie', hash: S2, at: 0, finished: 1, cleanup: { waiting: true } });
+  d.raw.prepare(`INSERT INTO files(id,root,path,library,kind,size,mtime,match_key,match_status,added_at) VALUES ('o', ?, 'Old/m.mkv', 'movies', 'movie', ?, 0, 'k', 'pending', 0)`).run(cfg().primary.movies, 20 * GB);
+  await batchTick(env);
+  let a = await kvGet(d, 'batch:' + A);
+  assert.equal(a.step, 'waiting');                                  // 20 GB usable, needs 35: waits; nothing ended yet
+  assert.equal(box.ts.has(S1), true);
+  a.queued_at -= 13 * 3600;
+  d.raw.prepare('UPDATE kv SET value = ? WHERE key = ?').run(JSON.stringify(a), 'batch:' + A);
+  await batchTick(env);
+  assert.equal(box.ts.has(S1), false);                               // ended early (freed 20 GB: enough)
+  assert.equal(box.ts.has(S2), true);                                // never one that isn't safely in the library
+  const p1 = await kvGet(d, 'push:1');
+  assert.equal(p1.cleanup.early, true);
+  await batchTick(env);
+  assert.equal((await kvGet(d, 'batch:' + A)).step, 'downloading');
+});
+
+test('qBittorrent "added" hook checks the space at once; "finished" also runs auto-send', async () => {
+  const d = db();
+  const env = { ...envFor(d), RSYNC_WEBHOOK_SECRET: 'hook-secret' };
+  const box = fakeBox({ free: 50 * GB, files: [{ name: 'Movie.mkv', size: 80 * GB }] });
+  const post = async event => {
+    const body = JSON.stringify({ hash: H, event, at: 1 });
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('hook-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = Buffer.from(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body))).toString('hex');
+    const waits = [];
+    const r = await handleQbitHook(new Request('https://w/hooks/qbit', { method: 'POST', body, headers: { 'X-Watch-Signature': 'sha256=' + sig } }), env, { waitUntil: p => waits.push(p) });
+    await Promise.all(waits);
+    return r.status;
+  };
+  assert.equal(await post('added'), 200);
+  assert.equal((await kvGet(d, 'batch:' + H)).step, 'too_big');
+  assert.equal(box.calls.filter(c => c === '/api/v2/torrents/info').length, 1);   // batches only, no auto-send pass
+  await post('finished');
+  assert.ok(box.calls.filter(c => c === '/api/v2/torrents/info').length > 2);
 });
 
 test('Find: torrents bigger than the free space get a box_note; requests pick a release that fits', async () => {

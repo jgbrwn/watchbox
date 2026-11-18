@@ -172,6 +172,30 @@ async function cleanupIfDone(env, rec, settings) {
   return del.error ? { error: del.error } : { removed: now(), ratio: seed.ratio, seeding_time: seed.seeding_time };
 }
 
+/** Ends seeding early for finished downloads already verified in the library, most-seeded first, until about
+ *  `bytes` are freed on the box. Used when a download has waited long for space (src/batches.mjs). */
+export async function endSeedingEarly(env, bytes) {
+  const recs = (await env.DB.prepare("SELECT value FROM kv WHERE key LIKE 'push:%'").all()).results.map(r => JSON.parse(r.value))
+    .filter(r => r.hash && r.cleanup?.waiting && !r.batch);
+  if (!recs.length) return { freed: 0, removed: [] };
+  const info = await getJson(env, 'dl', `/api/v2/torrents/info?hashes=${recs.map(r => r.hash).join('|')}`);
+  const byHash = new Map((info.data || []).map(t => [t.hash, t]));
+  const order = recs.filter(r => byHash.has(r.hash)).sort((a, b) => (byHash.get(b.hash).ratio || 0) - (byHash.get(a.hash).ratio || 0));
+  let freed = 0;
+  const removed = [];
+  for (const rec of order) {
+    if (freed >= bytes) break;
+    const t = byHash.get(rec.hash);
+    if (await verifyOnHostbrr(env, rec)) continue;                   // only what's safely in the library
+    const del = await qbPost(env, '/api/v2/torrents/delete', `hashes=${rec.hash}&deleteFiles=true`);
+    if (del.error) continue;
+    rec.cleanup = { removed: now(), early: true, ratio: t.ratio, seeding_time: t.seeding_time };
+    await kvSet(env.DB, `push:${rec.job}`, rec);
+    freed += t.size || 0; removed.push(rec.name);
+  }
+  return { freed, removed };
+}
+
 // Called once a push job has finished (webhook, admin page poll or cron). Idempotent.
 // Fast part (listing scan, verify, cleanup), then it asks for a full sync, which the cron runs within a minute
 // (a full sync can outlive a webhook's time budget).
@@ -344,10 +368,12 @@ export async function handleRsyncHook(request, env, ctx) {
   return reply('skipped');
 }
 
-// qBittorrent's "run on torrent finished" script pokes this (signed with the same secret).
+// qBittorrent's "run on torrent finished" and "run on torrent added" script pokes this (signed with the same secret).
+// Added: check at once that everything downloading still fits (src/batches.mjs) instead of at the next minute.
 export async function handleQbitHook(request, env, ctx) {
   const v = await verifySigned(request, env, 'X-Watch-Signature');
   if (v.res) return v.res;
-  ctx.waitUntil(batchTick(env).catch(e => ({ error: e.message })).then(b => autoPipeline(env).then(r => console.log('auto pipeline', JSON.stringify([b, r])))));
+  if (v.body.event === 'added') ctx.waitUntil(batchTick(env).then(b => console.log('batches (added)', JSON.stringify(b)), e => console.error('batches', e.message)));
+  else ctx.waitUntil(batchTick(env).catch(e => ({ error: e.message })).then(b => autoPipeline(env).then(r => console.log('auto pipeline', JSON.stringify([b, r])))));
   return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
 }

@@ -61,7 +61,9 @@ The download box only needs room for part of a download:
   a smaller release (for example x265 instead of a remux). Find only knows a torrent's total size, so this shows up
   once the download has started.
 - Several downloads waiting for space take turns in the order they started waiting. A smaller one can go ahead in
-  the meantime, but nothing jumps the queue past a download that has waited 12 hours.
+  the meantime, but nothing jumps the queue past a download that has waited 12 hours. If it's still short of space
+  then, finished downloads that are already in the library stop seeding early (shown in Pipeline as *seeding ended
+  early*) to make room.
 - Guest requests that download automatically pick the best release that fits.
 
 ## Guests (`/me`)
