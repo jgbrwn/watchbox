@@ -122,7 +122,7 @@ export async function handleAdmin(request, env, ctx) {
   if (path === '/admin/tools/launch') {
     const tool = tools(env).find(t => t.id === url.searchParams.get('tool'));
     if (!tool) return new Response('Unknown tool', { status: 404 });
-    return new Response(null, { status: 302, headers: { Location: await launchUrl(env, tool, url.searchParams.get('next') || '/'), 'Cache-Control': 'no-store' } });
+    return new Response(null, { status: 302, headers: { Location: await launchUrl(env, tool, url.searchParams.get('next') || '/', url.searchParams.get('theme')), 'Cache-Control': 'no-store' } });
   }
 
   if (request.method === 'POST') {
@@ -433,7 +433,7 @@ ${lowDisk.length ? `<div class=alert role=alert>Disk space is running low on ${l
 <section class="pane doc" id=manage role=tabpanel><div class=wrap>${manage}</div></section>
 <section class="pane doc" id=users role=tabpanel><div class=wrap>${usersHtml}</div></section>
 <section class="pane doc" id=pipeline role=tabpanel><div class=wrap>${pipeline}</div></section>
-${toolTabs.map(x => `<section class=pane id=${esc(x.id)} role=tabpanel>${x.phone_note ? `<p class=mnote>${esc(x.phone_note)} <a href="#pipeline">Pipeline</a> tab.</p>` : ''}<iframe title="${esc(x.name)}" data-src="/admin/tools/launch?tool=${esc(x.id)}" allow="clipboard-write"></iframe></section>`).join('')}
+${toolTabs.map(x => `<section class=pane id=${esc(x.id)} role=tabpanel>${x.phone_note ? `<p class=mnote>${esc(x.phone_note)} <a href="#pipeline">Pipeline</a> tab.</p>` : ''}<iframe title="${esc(x.name)}" data-src="/admin/tools/launch?tool=${esc(x.id)}" data-origin="https://${esc(x.host)}" allow="clipboard-write"></iframe></section>`).join('')}
 </main>
 <script>
 const $ = s => document.querySelector(s), esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -456,9 +456,19 @@ themeBtn.onclick = () => {
   const order = ['auto', 'dark', 'light'], next = order[(order.indexOf(document.documentElement.dataset.theme || 'auto') + 1) % 3];
   if (next === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
   try { next === 'auto' ? localStorage.removeItem('watch-theme') : localStorage.setItem('watch-theme', next); } catch {}
-  paintTheme();
+  paintTheme(); toolThemes();
 };
 paintTheme();
+// The embedded tools (Find, Downloads, Transfer) follow this page's dark/light: the launch link carries it, and
+// changes are posted to the open frames (src/tools.mjs themeScript applies them).
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+const shownTheme = () => document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light');
+const toolSrc = f => f.dataset.src + '&theme=' + shownTheme();
+function toolThemes() {
+  for (const f of document.querySelectorAll('iframe[data-origin]')) if (f.src) try { f.contentWindow.postMessage({ type: 'watch-theme', theme: shownTheme() }, f.dataset.origin); } catch {}
+  const ext = $('#ext'), f = document.querySelector('.pane.on iframe[data-origin]'); if (f) ext.href = toolSrc(f);
+}
+darkQuery.addEventListener('change', () => { if (!document.documentElement.dataset.theme) toolThemes(); });
 
 var manageLoaded = false;
 const tabs = [...document.querySelectorAll('.tab')];
@@ -471,8 +481,8 @@ function show(id) {
   for (const b of tabs) b.setAttribute('aria-selected', b.dataset.tab === id);
   for (const p of document.querySelectorAll('.pane')) p.classList.toggle('on', p.id === id);
   const f = document.querySelector('#' + id + ' iframe');
-  if (f && !f.src) f.src = f.dataset.src;
-  const ext = $('#ext'); ext.hidden = !f; if (f) ext.href = f.dataset.src;
+  if (f && !f.src) f.src = toolSrc(f);
+  const ext = $('#ext'); ext.hidden = !f; if (f) ext.href = toolSrc(f);
   if (id === 'pipeline') setTimeout(refresh);   // deferred: on a page opened at #pipeline this runs before the code below is set up
   if (id === 'manage' && !manageLoaded) { manageLoaded = true; setTimeout(() => { loadSuggestions(); loadTrash(); }); }
   if (id === 'users') setTimeout(() => { loadUsers(); loadShares(); loadAges(); });

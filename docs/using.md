@@ -30,6 +30,10 @@ admin page (Library → the unmatched list's TMDB form, or paste a TMDB link for
 | Pipeline | requests from guests, YouTube (videos and playlists), finished downloads with **Send to library**, downloads in progress, copy history, auto-send and cleanup settings |
 | Find · Downloads · Transfer | the download box's c-cli, qBittorrent (VueTorrent) and rsync-web, if you have one |
 
+The theme button in the header cycles automatic (follows the system), dark and light, and is remembered per browser.
+Find, Downloads and Transfer follow it: open tabs switch along (Downloads reloads to do so), and so do tools opened
+with *Open in new tab*.
+
 ### Duplicates
 
 watchbox checks for titles you already have at three points. It warns rather than refuses, since a second copy can

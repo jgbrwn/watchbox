@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { handleToolHost, launchUrl, toolForHost } from '../src/tools.mjs';
+import { handleToolHost, launchUrl, toolForHost, themeScript } from '../src/tools.mjs';
+import vm from 'node:vm';
 import { guessKind } from '../src/pipeline.mjs';
 
 const env = {
@@ -33,6 +34,40 @@ test('tool hosts require a signed login and keep cookies per host', async () => 
   const evil = new URL(await launchUrl(env, cc, '//evil.example'));
   r = await handleToolHost(req(cc.host, evil.pathname + evil.search), env, cc);
   assert.equal(r.headers.get('Location'), '/__watch/check?next=%2F');
+});
+
+test('tools follow the admin theme: launch link -> cookie -> tool storage, and live changes from /admin only', async () => {
+  const cc = toolForHost(env, 'watch-cc.example.com');
+  const auth = async theme => { const l = new URL(await launchUrl(env, cc, '/', theme)); return (await handleToolHost(req(cc.host, l.pathname + l.search), env, cc)).headers.getSetCookie(); };
+  assert.deepEqual((await auth('light')).map(c => c.split(';')[0].split('=')[0]), ['__Host-watch_tool', 'watch_theme']);
+  assert.match((await auth('light'))[1], /^watch_theme=light; Path=\/;.*Secure/);
+  assert.equal((await auth('purple')).length, 1);
+  assert.equal(themeScript({ id: 'other' }, 'https://admin.example.com'), '');
+
+  // Run the injected script against a stand-in page.
+  function page(id, cookie, stored = {}) {
+    const ls = new Map(Object.entries(stored)), html = { dataset: {}, className: '' }, on = {};
+    const w = { reloads: 0, ls, html, on, document: { cookie, documentElement: html },
+      localStorage: { getItem: k => ls.has(k) ? ls.get(k) : null, setItem: (k, v) => ls.set(k, String(v)) },
+      addEventListener: (t, f) => { on[t] = f; } };
+    w.location = { reload: () => w.reloads++ };
+    vm.runInNewContext(themeScript({ id }, 'https://admin.example.com'), w);
+    w.post = (origin, theme) => on.message({ origin, data: { type: 'watch-theme', theme } });
+    return w;
+  }
+  const c = page('cc', 'watch_theme=light');
+  assert.equal(c.ls.get('c-cli-theme'), 'light');
+  c.post('https://evil.example', 'dark'); assert.equal(c.ls.get('c-cli-theme'), 'light');
+  c.post('https://admin.example.com', 'dark');
+  assert.equal(c.ls.get('c-cli-theme'), 'dark'); assert.equal(c.html.dataset.theme, 'dark'); assert.equal(c.reloads, 0);
+  assert.match(c.document.cookie, /^watch_theme=dark/);
+  const r = page('rs', 'x=1'); r.post('https://admin.example.com', 'light'); assert.equal(r.html.className, 'light'); assert.equal(r.ls.get('rsync-web-theme'), 'light');
+  // VueTorrent: other settings are kept; a change reloads, the same theme doesn't.
+  const d = page('dl', 'watch_theme=dark', { vuetorrent_webuiSettings: '{"theme":{"mode":"light","light":"light-legacy","dark":"dark-legacy"},"lang":"en"}' });
+  assert.deepEqual(JSON.parse(d.ls.get('vuetorrent_webuiSettings')), { theme: { mode: 'dark', light: 'light-legacy', dark: 'dark-legacy' }, lang: 'en' });
+  d.post('https://admin.example.com', 'dark'); assert.equal(d.reloads, 0);
+  d.post('https://admin.example.com', 'light'); assert.equal(d.reloads, 1);
+  assert.equal(JSON.parse(d.ls.get('vuetorrent_webuiSettings')).theme.mode, 'light');
 });
 
 test('download names are classified as movie or TV', () => {

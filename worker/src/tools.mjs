@@ -39,11 +39,31 @@ function same(a, b) {
 }
 
 // Called from /admin (already Access-verified): a link that logs the browser into a tool host.
-export async function launchUrl(env, tool, next = '/') {
+// `theme` (dark | light): the admin page's current theme, handed on to the tool (see themeScript).
+export async function launchUrl(env, tool, next = '/', theme = null) {
   const exp = Math.floor(Date.now() / 1000) + LINK_TTL;
   const n = String(next).startsWith('/') && !String(next).startsWith('//') ? next : '/';
   const sig = await sign(env, `link|${tool.id}|${exp}|${n}`);
-  return `https://${tool.host}/__watch/auth?exp=${exp}&next=${encodeURIComponent(n)}&sig=${sig}`;
+  return `https://${tool.host}/__watch/auth?exp=${exp}&next=${encodeURIComponent(n)}&sig=${sig}` + (THEMES.includes(theme) ? '&theme=' + theme : '');
+}
+
+// Dark/light follows /admin. Each tool keeps its theme its own way; this script (added to the tool's HTML pages)
+// writes the admin's choice there before the tool reads it, and switches it live when /admin posts
+// {type: 'watch-theme', theme} to the frame. The choice is kept in a cookie on the tool host for later page loads.
+const THEMES = ['dark', 'light'];
+const THEME_COOKIE = 'watch_theme';
+export function themeScript(tool, admin) {
+  const how = {   // store(t): save the choice where the tool reads it (true if it changed); live(t): switch without a reload
+    cc: "store=function(t){if(localStorage.getItem('c-cli-theme')===t)return false;localStorage.setItem('c-cli-theme',t);return true};live=function(t){document.documentElement.dataset.theme=t;return true}",
+    rs: "store=function(t){if(localStorage.getItem('rsync-web-theme')===t)return false;localStorage.setItem('rsync-web-theme',t);return true};live=function(t){document.documentElement.className=t;return true}",
+    // VueTorrent keeps its settings as JSON and only reads them at start, so a change reloads the frame.
+    dl: "store=function(t){var k='vuetorrent_webuiSettings',s=JSON.parse(localStorage.getItem(k)||'{}');s.theme=s.theme||{light:'light-legacy',dark:'dark-legacy'};if(s.theme.mode===t)return false;s.theme.mode=t;localStorage.setItem(k,JSON.stringify(s));return true}"
+  }[tool.id];
+  if (!how) return '';
+  return `(function(){var store,live;${how};function set(t,now){if(t!=='dark'&&t!=='light')return;var changed=false;try{changed=store(t)}catch(e){}` +
+    `document.cookie='${THEME_COOKIE}='+t+'; Path=/; Max-Age=31536000; Secure; SameSite=Lax';if(now){if(live)live(t);else if(changed)location.reload()}}` +
+    `var c=/(?:^|;\\s*)${THEME_COOKIE}=(dark|light)/.exec(document.cookie);if(c)set(c[1],false);` +
+    `addEventListener('message',function(e){if(e.origin===${JSON.stringify(admin).replace(/</g, '\\u003c')}&&e.data&&e.data.type==='watch-theme')set(e.data.theme,true)})})()`;
 }
 
 async function hasSession(request, env, tool) {
@@ -77,11 +97,15 @@ export async function handleToolHost(request, env, tool) {
     if (!ok) return page(403, 'Link expired', `Open this tool from <a style=color:#8af href="${adminOrigin(env)}/admin#${tool.id}">the admin page</a>.`);
     const cexp = Math.floor(Date.now() / 1000) + COOKIE_TTL;
     const csig = await sign(env, `cookie|${tool.id}|${cexp}`);
-    return new Response(null, { status: 302, headers: {
+    const r = new Response(null, { status: 302, headers: {
       Location: `/__watch/check?next=${encodeURIComponent(next.startsWith('/') && !next.startsWith('//') ? next : '/')}`,
-      'Set-Cookie': `${COOKIE}=${cexp}.${csig}; Path=/; Max-Age=${COOKIE_TTL}; Secure; HttpOnly; SameSite=Lax`,
       'Cache-Control': 'no-store'
     } });
+    // Two cookies: the session, and the admin's theme (themeScript).
+    r.headers.append('Set-Cookie', `${COOKIE}=${cexp}.${csig}; Path=/; Max-Age=${COOKIE_TTL}; Secure; HttpOnly; SameSite=Lax`);
+    const theme = url.searchParams.get('theme');
+    if (THEMES.includes(theme)) r.headers.append('Set-Cookie', `${THEME_COOKIE}=${theme}; Path=/; Max-Age=31536000; Secure; SameSite=Lax`);
+    return r;
   }
 
   if (url.pathname === '/__watch/check') {
@@ -142,10 +166,12 @@ export async function handleToolHost(request, env, tool) {
       out = new Response(JSON.stringify(data), { status: 200, headers: hs });
     } catch (e) { console.error('find annotate', e.message); }
   }
-  // First-visit defaults for the tool's own settings (e.g. VueTorrent's theme). Never overwrites a choice.
-  if (tool.storage_defaults && typeof HTMLRewriter !== 'undefined' && request.method === 'GET' && (out.headers.get('Content-Type') || '').includes('text/html')) {
-    const js = `try{for(const[k,v]of Object.entries(${JSON.stringify(tool.storage_defaults).replace(/</g, '\\u003c')}))if(localStorage.getItem(k)===null)localStorage.setItem(k,v)}catch(e){}`;
-    out = new HTMLRewriter().on('head', { element(e) { e.prepend(`<script>${js}</script>`, { html: true }); } }).transform(out);
+  // Tool HTML pages: first-visit defaults for the tool's own settings (storage_defaults; never overwrites a choice),
+  // then the admin's dark/light theme (themeScript). Both run before the tool's own scripts.
+  if (typeof HTMLRewriter !== 'undefined' && request.method === 'GET' && (out.headers.get('Content-Type') || '').includes('text/html')) {
+    const js = (tool.storage_defaults ? `try{for(const[k,v]of Object.entries(${JSON.stringify(tool.storage_defaults).replace(/</g, '\\u003c')}))if(localStorage.getItem(k)===null)localStorage.setItem(k,v)}catch(e){}\n` : '') +
+      themeScript(tool, adminOrigin(env));
+    if (js) out = new HTMLRewriter().on('head', { element(e) { e.prepend(`<script>${js}</script>`, { html: true }); } }).transform(out);
   }
   const h = out.headers;
   const loc = h.get('Location');
