@@ -7,6 +7,8 @@
 #   WATCH_HOOK_URL=https://watch.example.com/hooks/qbit
 #   WATCH_HOOK_SECRET=<same value as the Worker secret RSYNC_WEBHOOK_SECRET>
 set -u
+# qBittorrent runs as a service with a minimal PATH (FreeBSD: no /usr/local/bin, where curl is).
+PATH=/usr/local/bin:/usr/bin:/bin:${PATH:-}; export PATH
 case "${1:-}" in ''|*[!0-9a-f]*) exit 0 ;; esac
 . "$HOME/.config/watch-hook.env" || exit 0
 case "${2:-finished}" in added) event=added ;; *) event=finished ;; esac
