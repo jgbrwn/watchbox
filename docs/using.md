@@ -55,8 +55,11 @@ The download box only needs room for part of a download:
 - A pack of many files (a season, a complete series) that doesn't fit is **downloaded in parts**: as many files as
   fit, sent to the library and removed from the box, then the next ones. Pipeline shows the progress
   (*part 2 … · 8 of 20 files sent*). Episodes show up in the library part by part. These downloads don't seed afterwards.
-- A single file bigger than the free space can't be split. The download is stopped and Pipeline marks it *too big*,
-  with **Remove from box**. Pick a smaller release (for example x265 instead of a remux).
+- A single file bigger than the free space can't be split. In a pack, it's left for last and everything else is
+  downloaded and sent first. When only that file is left (or the torrent is just that file), the download is stopped and
+  Pipeline marks it *too big*, with **Remove from box**. It carries on by itself if space frees up later. Otherwise pick
+  a smaller release (for example x265 instead of a remux). Find only knows a torrent's total size, so this shows up
+  once the download has started.
 - Guest requests that download automatically pick the best release that fits.
 
 ## Guests (`/me`)

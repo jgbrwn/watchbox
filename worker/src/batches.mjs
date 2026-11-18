@@ -15,7 +15,6 @@ import { VIDEO_EXT } from './library/parse.mjs';
 import { cfg } from './config.mjs';
 
 export const MARGIN = 5e9;          // always leave this much free on the box
-const SMALL = 100e6;                // small files (subtitles, nfo) may jump the queue to fill a batch
 const now = () => Math.floor(Date.now() / 1000);
 const qbPost = (env, path, body) => getJson(env, 'dl', path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
 const gb = n => (n / 1e9).toFixed(n < 10e9 ? 1 : 0) + ' GB';
@@ -34,19 +33,20 @@ export async function boxFree(env) {
 const fileIndex = (f, i) => Number.isInteger(f.index) ? f.index : i;
 const left = f => Math.max(0, Math.round(f.size * (1 - (f.progress || 0))));
 
-/** The next files to download within `budget` bytes: partly downloaded ones first, then in name order. */
+/** The next files to download within `budget` bytes: partly downloaded ones first, then in name order. A file that
+ *  doesn't fit is skipped for now (the rest carry on); `oversize` lists files bigger than the whole budget. */
 export function planBatch(files, sent, budget) {
   const done = new Set(sent);
   const todo = files.map((f, i) => ({ ...f, i: fileIndex(f, i) })).filter(f => !done.has(f.i))
     .sort((a, b) => (b.progress > 0) - (a.progress > 0) || String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
   const chosen = [];
-  let used = 0, blocked = false;
+  let used = 0;
   for (const f of todo) {
     const n = left(f);
-    if (used + n <= budget && (!blocked || n <= SMALL)) { chosen.push(f.i); used += n; }
-    else blocked = true;   // keep episodes in order: after the first one that doesn't fit, only small files
+    if (used + n <= budget) { chosen.push(f.i); used += n; }
   }
-  return { chosen, bytes: used, remaining: todo.length, largest: Math.max(0, ...todo.map(left)) };
+  const oversize = todo.filter(f => left(f) > budget).map(f => ({ name: String(f.name).split('/').pop(), size: left(f) }));
+  return { chosen, bytes: used, remaining: todo.length, largest: Math.max(0, ...todo.map(left)), oversize };
 }
 
 const activeDl = t => t.progress < 1 && !/^(stopped|paused)/i.test(t.state || '') && !/error|missing/i.test(t.state || '');
@@ -66,7 +66,8 @@ export async function batchTick(env) {
     if (!byHash.has(h) && (b.step !== 'done' || now() - b.at > 86400)) { await db.prepare('DELETE FROM kv WHERE key = ?').bind('batch:' + h).run(); recs.delete(h); }
   }
   const fresh = info.data.filter(t => activeDl(t) && t.total_size > 0 && !recs.has(t.hash) && !/meta/i.test(t.state || ''));
-  const waiting = [...recs.values()].filter(b => b.step === 'waiting');
+  // Waiting for space, or left with a file too big for the space: looked at again whenever the free space has grown.
+  const waiting = [...recs.values()].filter(b => b.step === 'waiting' || b.step === 'too_big');
   const ready = [...recs.values()].filter(b => b.step === 'downloading' && readyName(byHash.get(b.hash)));
   if (!fresh.length && !waiting.length && !ready.length) return { idle: true };
 
@@ -90,6 +91,7 @@ export async function batchTick(env) {
     const b = recs.get(t.hash);
     const budget = free - MARGIN - othersLeft(t.hash);
     if (!b && (t.amount_left || 0) <= budget) continue;            // fits: nothing to do
+    if (b?.step === 'too_big' && budget <= (b.budget || 0) + 1e9) continue;   // no more room than last time
     const files = await getJson(env, 'dl', `/api/v2/torrents/files?hash=${t.hash}`);
     if (!Array.isArray(files.data) || !files.data.length) continue;
     const rec = b || { hash: t.hash, name: t.name, kind: guessKind(t.name), sent: [], sent_bytes: 0, files: files.data.length,
@@ -107,10 +109,14 @@ async function startBatch(env, rec, files, budget, othersBusy, free) {
   const plan = planBatch(files, rec.sent, budget);
   rec.at = now();
   if (!plan.remaining) return { bytes: 0 };
+  const usable = gb(Math.max(0, budget));
+  const big = plan.oversize.length === 1 ? `${plan.oversize[0].name} (${gb(plan.oversize[0].size)})` : `${plan.oversize.length} files (up to ${gb(plan.largest)})`;
   if (!plan.chosen.length) {
     await qbStop(env, rec.hash);
-    if (othersBusy) { rec.step = 'waiting'; rec.note = `Waiting for space on the box (next file ${gb(plan.largest)}, ${gb(Math.max(0, free - MARGIN))} usable)`; }
-    else { rec.step = 'too_big'; rec.note = `Too big for the box: a ${gb(plan.largest)} file, ${gb(Math.max(0, free - MARGIN))} usable. Pick a smaller release.`; }
+    rec.budget = budget;
+    if (othersBusy) { rec.step = 'waiting'; rec.note = `Waiting for other downloads to free space (next file ${gb(plan.largest)}, ${usable} usable now)`; }
+    else if (rec.sent.length) { rec.step = 'too_big'; rec.note = `Everything else is sent. ${big} doesn’t fit (${usable} usable): it continues if space frees up, or Remove from box.`; }
+    else { rec.step = 'too_big'; rec.note = `Too big for the box: ${big}, ${usable} usable. It continues if space frees up; or Remove from box and pick a smaller release.`; }
     await kvSet(env.DB, 'batch:' + rec.hash, rec);
     return { bytes: 0 };
   }
@@ -118,7 +124,7 @@ async function startBatch(env, rec, files, budget, othersBusy, free) {
   const all = files.map(fileIndex);
   await setPrio(env, rec.hash, all.filter(i => !chosen.has(i)), 0);
   await setPrio(env, rec.hash, plan.chosen, 1);
-  if (rec.batches > 0 || rec.step === 'waiting') {
+  if (rec.batches > 0 || rec.step === 'waiting' || rec.step === 'too_big') {
     // The removed files' pieces are still marked as had; a recheck clears that before peers ask for them.
     await qbPost(env, '/api/v2/torrents/recheck', 'hashes=' + rec.hash);
   }
@@ -126,7 +132,8 @@ async function startBatch(env, rec, files, budget, othersBusy, free) {
   rec.batches++;
   rec.current = plan.chosen;
   rec.step = 'downloading';
-  rec.note = `Downloading in parts: part ${rec.batches}, ${plan.chosen.length} of ${plan.remaining} remaining files (${gb(plan.bytes)})`;
+  rec.note = `Downloading in parts: part ${rec.batches}, ${plan.chosen.length} of ${plan.remaining} remaining files (${gb(plan.bytes)})` +
+    (plan.oversize.length ? ` · ${big} ${plan.oversize.length === 1 ? 'is' : 'are'} bigger than the free space: left for last` : '');
   delete rec.error;
   await kvSet(env.DB, 'batch:' + rec.hash, rec);
   return { chosen: plan.chosen, bytes: plan.bytes };

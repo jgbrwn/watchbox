@@ -62,7 +62,8 @@ downloaded a batch at a time. The Worker selects the files that fit (qBittorrent
 and when they finish it stops the torrent and has rsync-web copy them with `remove_source` (rsync
 `--remove-source-files`). It then checks they're in the library at the same size, skips them, selects the next batch,
 rechecks the torrent (so it no longer offers the removed files to peers) and starts it again. After the last batch the
-torrent is removed. A single file bigger than the free space can't be split: the torrent is stopped and marked too big.
+torrent is removed. A file bigger than the free space is skipped while the others are done. When nothing else is left, the
+torrent is stopped and marked too big, and it's looked at again whenever the free space grows.
 Batched torrents don't seed once their files have left the box.
 
 ## Where state lives

@@ -56,12 +56,41 @@ function fakeBox({ free, files }) {
 const inLibrary = (d, box, files) => { for (const f of box.files.filter(f => files.includes(f.index)))
   d.raw.prepare(`INSERT INTO files(id,root,path,library,kind,size,mtime,match_key,match_status,added_at) VALUES (?, ?, ?, 'tv', 'episode', ?, 0, 'k', 'pending', 0)`).run('f' + f.index, cfg().primary.tv, f.name, f.size); };
 
-test('planBatch: partly downloaded first, then in order; small files fill gaps; nothing if the next file is too big', () => {
+test('planBatch: partly downloaded first, then in order; files that don’t fit are skipped for now', () => {
   const f = [{ name: 'a/E03.mkv', size: 30 * GB }, { name: 'a/E01.mkv', size: 30 * GB }, { name: 'a/E02.mkv', size: 30 * GB, progress: 0.5 }, { name: 'a/info.nfo', size: 1e3 }];
   assert.deepEqual(planBatch(f, [], 50 * GB).chosen, [2, 1, 3]);   // E02 (15 GB left), E01, then the small nfo; E03 waits
   assert.deepEqual(planBatch(f, [1, 2, 3], 50 * GB).chosen, [0]);
   const none = planBatch(f, [1, 2, 3], 20 * GB);
   assert.deepEqual(none.chosen, []); assert.equal(none.largest, 30 * GB);
+  const mixed = planBatch([{ name: 'E01.mkv', size: 10 * GB }, { name: 'E02.mkv', size: 60 * GB }, { name: 'E03.mkv', size: 10 * GB }], [], 45 * GB);
+  assert.deepEqual(mixed.chosen, [0, 2]);
+  assert.deepEqual(mixed.oversize, [{ name: 'E02.mkv', size: 60 * GB }]);
+});
+
+test('a pack with one file bigger than the free space: the rest is sent, that one waits until space frees up', async () => {
+  const d = db(), env = envFor(d);
+  const box = fakeBox({ free: 50 * GB, files: [{ name: 'E01.mkv', size: 20 * GB }, { name: 'E02.mkv', size: 60 * GB }, { name: 'E03.mkv', size: 20 * GB }] });
+  await batchTick(env);
+  let rec = await kvGet(d, 'batch:' + H);
+  assert.deepEqual(rec.current, [0, 2]);
+  assert.match(rec.note, /E02\.mkv \(60 GB\) is bigger than the free space: left for last/);
+  box.finishBatch(); await batchTick(env);
+  rec = await kvGet(d, 'batch:' + H);
+  inLibrary(d, box, rec.current);
+  await batchSent(env, await kvGet(d, 'push:' + rec.job), 'completed');
+  rec = await kvGet(d, 'batch:' + H);
+  assert.equal(rec.step, 'too_big');
+  assert.match(rec.note, /^Everything else is sent\. E02\.mkv \(60 GB\) doesn’t fit \(45 GB usable\)/);
+  assert.match(box.torrent.state, /^stopped/);
+  const calls = box.calls.length;
+  await batchTick(env);                                            // no more room: not even looked at
+  assert.equal(box.calls.filter(c => c === '/api/v2/torrents/files').length, box.calls.slice(0, calls).filter(c => c === '/api/v2/torrents/files').length);
+  box.free += 30 * GB;                                             // something else was removed from the box
+  await batchTick(env);
+  rec = await kvGet(d, 'batch:' + H);
+  assert.equal(rec.step, 'downloading');
+  assert.deepEqual(rec.current, [1]);
+  assert.equal(box.torrent.state, 'downloading');
 });
 
 test('a 90 GB pack on a box with 50 GB free: three parts, each sent and removed, then the torrent is removed', async () => {
@@ -134,7 +163,7 @@ test('one file bigger than the free space: the torrent is stopped as too big; to
   await batchTick(env);
   const rec = await kvGet(d, 'batch:' + H);
   assert.equal(rec.step, 'too_big');
-  assert.match(rec.note, /80 GB file, 45 GB usable/);
+  assert.match(rec.note, /Too big for the box: Movie\.2160p\.mkv \(80 GB\), 45 GB usable/);
   assert.equal(box.torrent.state, 'stoppedDL');
 
   const d2 = db();
