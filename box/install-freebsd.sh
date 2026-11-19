@@ -4,11 +4,11 @@
 # STATUS: not yet run on a fresh FreeBSD install; please report problems.
 #
 #   sh install-freebsd.sh --domain box.example.com --worker https://watch.example.com --storage watchbox@storage.example.com \
-#                         [--storage-port 22] [--tmdb-token TOKEN] [--harden]
+#                         [--storage-port 22] [--tmdb-token TOKEN] [--harden] [--bbr]
 #
 # Options as in install.sh (including --build). Safe to run again. Never touches the firewall (pf/ipfw): open 80/443 yourself if you use one.
 set -eu
-HARDEN=0 BUILD=
+HARDEN=0 BUILD= BBR=0
 DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= TMDB= U=watchbox
 OPT=/usr/local/watchbox PRIV=/var/db/watchbox-box ETC=/usr/local/etc/watchbox RC=/usr/local/etc/rc.d
 VUETORRENT_VERSION=2.36.1
@@ -24,7 +24,8 @@ while [ $# -gt 0 ]; do
     --omdb-key) OMDB=$2; shift 2 ;;
     --harden) HARDEN=1; shift ;;
     --build) BUILD=--build; shift ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    --bbr) BBR=1; shift ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -259,6 +260,9 @@ for t in cc dl rs; do
 done
 su -m "$U" -c "HOME=$H rsync --list-only -e 'ssh -o BatchMode=yes -o ConnectTimeout=10' storage:" >/dev/null 2>&1 &&
   echo "storage: reachable" || echo "storage: not reachable yet (add this box's key to the storage server, below)"
+
+say "Network"
+[ -f "$HERE/bbr.sh" ] && { sh "$HERE/bbr.sh" $([ $BBR = 1 ] && echo --enable) || true; }
 
 say "Security check"
 SC="$HERE/../security-check.sh"

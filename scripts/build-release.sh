@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds a watchbox release bundle: dist/watchbox-<version>.tar.gz with
 #   storage/  install.sh, list.php, manage.php, config.example.php, htaccess.example
-#   box/      install.sh, watch-torrent-done, bin/<os>-<arch>/{watch-stream,c-cli-web,rsync-web}
+#   box/      install.sh, watch-torrent-done, bbr.sh, bin/<os>-<arch>/{watch-stream,c-cli-web,rsync-web}
 #   security-check.sh (run by both installers)
 # for linux and freebsd on amd64 and arm64, plus SHA256SUMS. c-cli and rsync-web are built from pinned commits.
 # Usage: scripts/build-release.sh [version]     (needs go and git)
@@ -29,7 +29,7 @@ unset GOOS GOARCH CGO_ENABLED
 
 install -m 755 "$ROOT/storage/install.sh" "$ROOT/storage/install-shared.sh" "$OUT/storage/"
 install -m 644 "$ROOT/storage/list.php" "$ROOT/storage/manage.php" "$ROOT/storage/config.example.php" "$ROOT/storage/htaccess.example" "$OUT/storage/"
-install -m 755 "$ROOT/box/install.sh" "$ROOT/box/install-freebsd.sh" "$ROOT/box/watch-torrent-done" "$ROOT/box/get-binaries.sh" "$OUT/box/"
+install -m 755 "$ROOT/box/install.sh" "$ROOT/box/install-freebsd.sh" "$ROOT/box/watch-torrent-done" "$ROOT/box/get-binaries.sh" "$ROOT/box/bbr.sh" "$OUT/box/"
 install -m 644 "$ROOT/box/versions.env" "$OUT/box/"
 install -m 755 "$ROOT/security-check.sh" "$OUT/"
 install -m 644 "$ROOT/LICENSE" "$OUT/"

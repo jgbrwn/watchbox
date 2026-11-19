@@ -29,6 +29,23 @@ sudo sh box/install.sh --domain box.example.com --worker https://watch.example.c
 
 - `--build`: compile the box's own programs here instead of using prebuilt ones (see below).
 
+- `--bbr`: switch TCP to BBR, now and at every boot ([below](#faster-copies-bbr)). Without it the installer only
+  reports which one is in use.
+
+### Faster copies (BBR)
+
+Each copy from the box to storage is one TCP connection. If the storage server is far away (check with
+`ping`: over ~100 ms) and the route drops some packets under load, the systems' default congestion control slows down
+at every loss and recovers slowly, so copies crawl even though both servers have fast connections. BBR copes with that
+much better. One install went from ~1 MB/s to ~4 MB/s per copy on a 167 ms route. With nearby storage it makes little
+difference.
+
+The installer reports the current setting; `--bbr` turns BBR on. On a box that's already installed:
+`sudo sh box/bbr.sh --enable`. Linux writes `/etc/sysctl.d/60-watchbox-bbr.conf` and
+`/etc/modules-load.d/watchbox-bbr.conf`; FreeBSD writes `tcp_bbr_load` in `/boot/loader.conf` and
+`net.inet.tcp.functions_default=bbr` in `/etc/sysctl.conf`. It prints how to undo it. To compare before and after:
+`dd if=/dev/zero bs=1M count=50 | ssh <storage> 'cat > /dev/null'` (FreeBSD: `bs=1m`).
+
 ### Where the programs come from
 
 The box runs three small Go programs: **watch-stream** (part of watchbox, in `box/watch-stream/`), **c-cli-web**

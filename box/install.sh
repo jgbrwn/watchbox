@@ -18,10 +18,12 @@
 # from the latest release, checksum-verified; or add --build to compile them here: see get-binaries.sh).
 # --harden applies the safe fixes from security-check.sh (SSH keys-only, automatic security updates, fail2ban,
 # time sync); --firewall also turns on ufw (allowing SSH, 80, 443 and the torrent port). Without them it only reports.
+# --bbr switches TCP to BBR (now and at boot): much faster copies to a far-away storage server (see bbr.sh). Without it
+# the installer only reports which one is in use.
 # Safe to run again (keeps passwords, keys and qBittorrent's settings). Never touches the firewall.
 # Prints this box's SSH key (give it to the storage installer: --box-key) and the values the Cloudflare setup needs.
 set -eu
-HARDEN=0 BUILD= FIREWALL=0
+HARDEN=0 BUILD= FIREWALL=0 BBR=0
 
 DOMAIN= WORKER= STORAGE= STORAGE_PORT=22 STORAGE_PATH= OMDB= TMDB= U=watchbox
 OPT=/opt/watchbox PRIV=/var/lib/watchbox-box ETC=/etc/watchbox
@@ -38,8 +40,9 @@ while [ $# -gt 0 ]; do
     --omdb-key) OMDB=$2; shift 2 ;;
     --harden) HARDEN=1; shift ;;
     --build) BUILD=--build; shift ;;
+    --bbr) BBR=1; shift ;;
     --firewall) FIREWALL=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -262,6 +265,9 @@ for t in cc dl rs; do
 done
 su -s /bin/sh "$U" -c "rsync --list-only -e 'ssh -o BatchMode=yes -o ConnectTimeout=10' storage:" >/dev/null 2>&1 &&
   echo "storage: reachable" || echo "storage: not reachable yet (add this box's key to the storage server, below)"
+
+say "Network"
+[ -f "$HERE/bbr.sh" ] && { sh "$HERE/bbr.sh" $([ $BBR = 1 ] && echo --enable) || true; }
 
 say "Security check"
 SC="$HERE/../security-check.sh"; [ -f "$SC" ] || SC="$HERE/security-check.sh"
