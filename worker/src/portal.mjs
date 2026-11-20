@@ -62,7 +62,7 @@ async function api(request, env, ctx, path, url, user) {
     devices: (await listDevices(db, user.id)).map(({ user_id, username, display_name, ...d }) => d),
     requests: await requestsFor(env, user.id), max_open: MAX_OPEN
   });
-  if (path === '/me/api/search') return json({ results: await searchTitles(env, url.searchParams.get('q'), user.id) });
+  if (path === '/me/api/search') return json({ results: await searchTitles(env, url.searchParams.get('q'), user) });
   if (path === '/me/api/request' && request.method === 'POST') return r(await createRequest(env, user, body));
   if (path === '/me/api/cancel' && request.method === 'POST') {
     await db.prepare("DELETE FROM requests WHERE id = ? AND user_id = ? AND status IN ('pending','declined','available')").bind(String(body.id || ''), user.id).run();
@@ -259,7 +259,7 @@ async function search() {
     const d = await api('search?q=' + encodeURIComponent(q));
     $('#sres').style.display = '';
     $('#sres').innerHTML = d.results.map(r => '<div class=res>' + (r.poster ? '<img alt=""' + (r.kind === 'youtube' ? ' class=yt referrerpolicy=no-referrer' : '') + ' src="' + esc(r.poster) + '">' : '<span></span>') + '<div><b>' + esc(r.title) + '</b> <span class=muted>' + (r.year ? r.year + ' · ' : '') + kindName(r.kind) + '</span><p>' + esc(r.overview) + '</p></div>' +
-      (r.in_library ? '<span class="pill ok">In the library</span>' : r.requested ? '<span class="pill on">Requested</span>' : '<button data-req="' + r.tmdb_id + '" data-kind="' + r.kind + '"' + (r.yt_id ? ' data-yt="' + esc(r.yt_id) + '"' : '') + '>Ask for it</button>') + '</div>').join('') || '<p class=hint style="margin:0">' + (/youtu\.?be/i.test(q) ? 'That YouTube link doesn’t point to a video YouTube knows about.' : 'No matches.') + '</p>';
+      (r.age_limit ? '<span class=pill title="' + (r.age_limit === 'above' ? 'Above your age limit' : 'No age rating: your account only shows rated titles') + '">' + (r.age_limit === 'above' ? 'Above your age limit' : 'Not rated') + '</span>' : r.in_library ? '<span class="pill ok">In the library</span>' : r.requested ? '<span class="pill on">Requested</span>' : '<button data-req="' + r.tmdb_id + '" data-kind="' + r.kind + '"' + (r.yt_id ? ' data-yt="' + esc(r.yt_id) + '"' : '') + '>Ask for it</button>') + '</div>').join('') || '<p class=hint style="margin:0">' + (/youtu\.?be/i.test(q) ? 'That YouTube link doesn’t point to a video YouTube knows about.' : 'No matches.') + '</p>';
   } catch (e) { $('#smsg').innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; }
 }
 $('#suggest').onclick = async () => { $('#npw').value = (await api('passphrase')).passphrase; $('#npw').type = 'text'; };

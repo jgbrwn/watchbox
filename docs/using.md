@@ -97,3 +97,7 @@ Give a person an age limit (7, 12, 14, 16) on Users. Ages come from certificates
 from TMDB). A limited person only sees titles at or under their limit, everywhere (apps, search, continue watching,
 /me, streams). Unrated titles, including YouTube videos, are hidden unless you allow unrated for them or give the title
 an age under Users → Age ratings. Give kids their own login: a TV signed in as an adult shows everything.
+
+Requests follow the same rule: a limited person can't ask for a title above their limit, or an unrated one (any
+YouTube video) unless unrated is allowed for them. /me's search marks those, asking is refused with the reason, and
+you aren't emailed about it. Anything they can ask for comes to you to approve, even with auto-approve on.

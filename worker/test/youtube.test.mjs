@@ -72,7 +72,7 @@ test('YouTube requests: link search, auto-approve sends to the box, job mirrored
   d.raw.prepare("DELETE FROM items").run(); d.raw.prepare("DELETE FROM files").run(); d.raw.prepare("DELETE FROM file_paths").run();
   const ins = (sql, ...a) => d.raw.prepare(sql).run(...a);
   ins("INSERT INTO users(id,username,password_hash,created_at,email,auto_approve,notify) VALUES ('ua','alice','x',0,'a@example.com',1,1),('ub','bob','x',0,'b@example.com',0,1)");
-  ins("INSERT INTO users(id,username,password_hash,created_at,email,auto_approve,max_age) VALUES ('uk','kid','x',0,'k@example.com',1,12)");
+  ins("INSERT INTO users(id,username,password_hash,created_at,email,auto_approve,max_age,allow_unrated) VALUES ('uk','kid','x',0,'k@example.com',1,12,1),('un','young','x',0,'y@example.com',1,12,0)");
   const box = new Map(), sent = [];
   globalThis.fetch = async (url, init) => {
     const u = new URL(String(url));
@@ -89,7 +89,13 @@ test('YouTube requests: link search, auto-approve sends to the box, job mirrored
   assert.equal(s.length, 1); assert.equal(s[0].kind, 'youtube'); assert.equal(s[0].title, 'Never Gonna Give You Up'); assert.equal(s[0].in_library, false);
   assert.equal((await createRequest(env, await user('ub'), { kind: 'youtube', yt_id: 'zzzzzzzzzzz' })).status, 404, 'unknown video');
 
-  // Kid (age-limited, auto-approve) → owner decides; nothing sent to the box.
+  // Age-limited without unrated titles: YouTube is unrated, so it's refused up front (and search says so).
+  assert.equal((await searchTitles(env, `https://youtu.be/${VID}`, await user('un')))[0].age_limit, 'unrated');
+  const no = await createRequest(env, await user('un'), { kind: 'youtube', yt_id: VID });
+  assert.equal(no.status, 403); assert.match(no.body.error, /no age rating/);
+  assert.equal(sent.length, 0, 'the owner isn’t bothered');
+  // Kid (age-limited, unrated allowed, auto-approve) → owner decides; nothing sent to the box.
+  assert.equal((await searchTitles(env, `https://youtu.be/${VID}`, await user('uk')))[0].age_limit, null);
   assert.equal((await createRequest(env, await user('uk'), { kind: 'youtube', url: `https://www.youtube.com/watch?v=${VID}` })).body.status, 'pending');
   assert.equal(box.size, 0);
   assert.equal(sent.at(-1).to, 'owner@example.com');

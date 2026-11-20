@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
 import { openLocalDb } from '../tools/local-db.mjs';
 import { handleUsers, passphrase, userStatus } from '../src/users.mjs';
-import { createRequest, decide, refreshRequests, requestsFor, pickTorrent } from '../src/requests.mjs';
+import { createRequest, decide, refreshRequests, requestsFor, pickTorrent, searchTitles } from '../src/requests.mjs';
 import { handleJellyfin } from '../src/jellyfin.mjs';
 import { hashPassword } from '../src/passwords.mjs';
 
@@ -113,6 +113,50 @@ test('requests: auto-approve downloads movies, others join, owner decides, ready
   assert.deepEqual(sent.map(m => m.to).sort(), ['a@example.com', 'b@example.com']);
   assert.equal((await requestsFor(env, 'ua'))[0].label, 'Ready to watch');
   assert.equal((await createRequest(env, alice, { kind: 'movie', tmdb_id: 949 })).status, 409, 'already in the library');
+});
+
+test('age-limited users can’t ask for titles above their limit, or unrated ones unless allowed; overrides count', async () => {
+  const d = db(), sent = [];
+  const ins = (sql, ...a) => d.raw.prepare(sql).run(...a);
+  ins("INSERT INTO users(id,username,password_hash,created_at,max_age,allow_unrated,auto_approve) VALUES ('k','kid','x',0,12,0,1),('t','teen','x',0,14,1,1)");
+  const rel = c => ({ results: [{ iso_3166_1: 'US', release_dates: [{ certification: c }] }] });
+  const tm = { 1: { title: 'Rated R', release_dates: rel('R') }, 2: { title: 'Rated PG', release_dates: rel('PG') }, 3: { title: 'Unrated', release_dates: rel('') },
+    4: { title: 'Overridden', release_dates: rel('R') }, 5: { title: 'In library, R', release_dates: rel('R') } };
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    if (u.host === 'api.themoviedb.org') {
+      const m = /^\/3\/movie\/(\d+)$/.exec(u.pathname);
+      if (m) return Response.json({ id: Number(m[1]), release_date: '2000-01-01', ...tm[m[1]] });
+      if (u.pathname === '/3/tv/9') return Response.json({ id: 9, name: 'Show', content_ratings: { results: [{ iso_3166_1: 'US', rating: 'TV-MA' }] } });
+      if (u.pathname === '/3/search/multi') return Response.json({ results: [{ media_type: 'movie', id: 5, title: 'In library, R' }, { media_type: 'movie', id: 2, title: 'Rated PG' }] });
+    }
+    if (u.host === 'dl.example.net') return Response.json([]);
+    throw new Error('unexpected ' + url);
+  };
+  const env = { DB: d, TMDB_TOKEN: 't', TOOLS_AUTHORIZATION: 'Basic eDp5', ADMIN_EMAIL_ALLOWLIST: 'owner@example.com', EMAIL_FROM: 'w@example.com',
+    EMAIL: { send: async m => { sent.push(m); return {}; } }, TOOLS: { dl: { name: 'qBittorrent', upstream: 'https://dl.example.net' } } };
+  const kid = await d.prepare("SELECT * FROM users WHERE id='k'").first(), teen = await d.prepare("SELECT * FROM users WHERE id='t'").first();
+  ins("INSERT INTO age_overrides(key, age, at) VALUES ('movie:4', 0, 0)");
+  ins(`INSERT INTO files(id,root,path,library,kind,size,mtime,match_key,match_status,movie_id,added_at) VALUES ('f5','media-movies','X/X.mkv','movies','movie',1,0,'k','matched',5,0)`);
+  ins(`INSERT INTO items(id,type,library,name,sort_name,date_created,hash,provider_ids,age,file_id) VALUES ('i5','Movie','movies','In library, R','in library',0,'h','{"Tmdb":"5"}',17,'f5')`);
+
+  let r = await createRequest(env, kid, { kind: 'movie', tmdb_id: 1 });
+  assert.equal(r.status, 403); assert.match(r.body.error, /rated 17\+, above your age limit/);
+  r = await createRequest(env, kid, { kind: 'movie', tmdb_id: 3 });
+  assert.equal(r.status, 403); assert.match(r.body.error, /no age rating/);
+  assert.equal((await createRequest(env, kid, { kind: 'tv', tmdb_id: 9 })).status, 403, 'TV-MA');
+  r = await createRequest(env, kid, { kind: 'movie', tmdb_id: 5 });
+  assert.equal(r.status, 403, 'in the library but above the limit: refused, not "already in the library"');
+  assert.equal(sent.length, 0, 'refused requests don’t reach the owner');
+  assert.equal(await d.prepare('SELECT count(*) n FROM requests').first().then(x => x.n), 0);
+
+  assert.equal((await createRequest(env, kid, { kind: 'movie', tmdb_id: 4 })).body.status, 'pending', 'owner override to all ages');
+  assert.equal((await createRequest(env, kid, { kind: 'movie', tmdb_id: 2 })).body.status, 'pending', 'PG is fine; limited users always go to the owner');
+  assert.equal((await createRequest(env, teen, { kind: 'movie', tmdb_id: 3 })).body.status, 'pending', 'unrated allowed for the teen');
+  assert.equal(sent.length, 3);
+
+  const s = await searchTitles(env, 'something', kid);
+  assert.deepEqual(s.map(x => [x.tmdb_id, x.in_library, x.age_limit]), [[5, false, 'above'], [2, false, null]]);
 });
 
 test('torrent choice: 1080p, then 720p, then 4K; bluray first; needs seeders', () => {
