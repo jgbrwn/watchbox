@@ -98,6 +98,10 @@ from TMDB). A limited person only sees titles at or under their limit, everywher
 /me, streams). Unrated titles, including YouTube videos, are hidden unless you allow unrated for them or give the title
 an age under Users → Age ratings. Give kids their own login: a TV signed in as an adult shows everything.
 
-Requests follow the same rule: a limited person can't ask for a title above their limit, or an unrated one (any
-YouTube video) unless unrated is allowed for them. /me's search marks those, asking is refused with the reason, and
-you aren't emailed about it. Anything they can ask for comes to you to approve, even with auto-approve on.
+Requests: a limited person can't ask for a title rated above their limit (/me's search marks the ones already in the
+library; asking for others is refused with the reason, and you aren't emailed). Unrated titles and YouTube videos
+still come to you, and they're told that it has no age rating and you'll decide. Everything a limited person asks for
+comes to you to approve, even with auto-approve on. If one you approve arrives while it's still hidden from them, they
+see "In the library, waiting for an age rating" and you get an email saying who can't see it: give it an age under
+Users → Age ratings. When you decline a request, the people who asked get an email (if they have one) and a notice on
+/me until they dismiss it.

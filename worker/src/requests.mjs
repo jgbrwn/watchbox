@@ -31,29 +31,35 @@ const keyOf = r => r.kind === 'youtube' ? { kind: 'youtube', tmdb_id: 0, yt_id: 
 const inLib = (db, k) => k.kind === 'youtube' ? yt.inLibrary(db, k.yt_id) : inLibrary(db, k.kind, k.tmdb_id);
 const kindWord = k => k === 'tv' ? 'the show' : k === 'youtube' ? 'the YouTube video' : 'the movie';
 
-// Age-limited users can't ask for what they couldn't watch: titles above their limit, or unrated ones (all YouTube
-// videos) unless they're allowed unrated titles. The owner's age overrides count. Returns the refusal, or null.
-const AGE_MSG = { above: age => `That one is rated ${age}+, above your age limit.`,
-  unrated: () => 'That one has no age rating, and your account only shows rated titles. Ask the owner if you’d like it allowed.' };
+// Age-limited users can't ask for titles rated above their limit (the owner's age overrides count). Unrated titles
+// (and YouTube videos, which have no rating) still go to the owner, who decides and can give them an age.
 export async function ageRefusal(db, user, key, age) {
   if (user?.max_age == null) return null;
   const o = key ? await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind(key).first() : null;
   if (o) age = o.age;
-  if (allowedAge(user, age)) return null;
-  return { status: 403, body: { error: age == null ? AGE_MSG.unrated() : AGE_MSG.above(age), age_limit: age == null ? 'unrated' : 'above' } };
+  if (age == null || age <= user.max_age) return null;
+  return { status: 403, body: { error: `That one is rated ${age}+, above your age limit.`, age_limit: 'above' } };
 }
-/** For search results: what a limited user's library allows of a title that's already there (null = fine or not there). */
+const UNRATED_NOTE = 'This one has no age rating, so your account won’t show it on its own. Your request went to the owner, who decides whether to add it and whether you can watch it.';
+/** A library title's age for a limited user: "above" | "unrated" when it's hidden from them, else null (fine, or not there). */
 async function libraryBlock(db, user, kind, tmdbId) {
   if (user?.max_age == null) return null;
   const r = await db.prepare("SELECT age FROM items WHERE type = ? AND json_extract(provider_ids, '$.Tmdb') = ? LIMIT 1").bind(kind === 'movie' ? 'Movie' : 'Series', String(tmdbId)).first();
   return r && !allowedAge(user, r.age) ? (r.age == null ? 'unrated' : 'above') : null;
+}
+/** Can this person see the title in the library? null: no library item for it yet. (Playlists count as visible.) */
+async function visibleTo(db, user, k) {
+  if (user?.max_age == null) return true;
+  let r;
+  if (k.kind === 'youtube') { if (k.yt_id.startsWith('list:')) return true; const id = await yt.itemFor(db, k.yt_id); r = id && await db.prepare('SELECT age FROM items WHERE id = ?').bind(id).first(); }
+  else r = await db.prepare("SELECT age FROM items WHERE type = ? AND json_extract(provider_ids, '$.Tmdb') = ? LIMIT 1").bind(k.kind === 'movie' ? 'Movie' : 'Series', String(k.tmdb_id)).first();
+  return r ? allowedAge(user, r.age) : null;
 }
 const shelf = k => k === 'tv' ? 'Shows' : k === 'youtube' ? 'YouTube' : 'Movies';
 
 /** `user`: the signed-in user (or just their id). Results a limited user can't ask for carry `age_limit` ("above" | "unrated"). */
 export async function searchTitles(env, q, user) {
   const userId = typeof user === 'string' ? user : user?.id;
-  const ytBlock = user?.max_age != null && !user.allow_unrated ? 'unrated' : null;   // overrides aside, YouTube is unrated
   q = String(q || '').trim().slice(0, 300);
   const listId = yt.parsePlaylistUrl(q);
   if (listId) {   // a pasted playlist link
@@ -61,7 +67,7 @@ export async function searchTitles(env, q, user) {
     if (p.error || !p.data.entries.length) return [];
     const mine = userId ? await env.DB.prepare("SELECT status FROM requests WHERE user_id = ? AND kind = 'youtube' AND yt_id = ?").bind(userId, 'list:' + listId).first() : null;
     return [{ kind: 'youtube', yt_id: 'list:' + listId, tmdb_id: 0, title: p.data.title || 'YouTube playlist', year: null, poster: yt.thumbUrl(p.data.entries[0].id),
-      overview: `YouTube playlist · ${p.data.entries.length} videos${p.data.channel ? ' · ' + p.data.channel : ''}`, in_library: await yt.inLibrary(env.DB, 'list:' + listId), requested: mine?.status || null, age_limit: ytBlock }];
+      overview: `YouTube playlist · ${p.data.entries.length} videos${p.data.channel ? ' · ' + p.data.channel : ''}`, in_library: await yt.inLibrary(env.DB, 'list:' + listId), requested: mine?.status || null }];
   }
   const ytId = yt.parseYouTubeUrl(q);
   if (ytId && /youtu\.?be/i.test(q)) {   // a pasted YouTube link
@@ -70,7 +76,7 @@ export async function searchTitles(env, q, user) {
     const mine = userId ? await env.DB.prepare("SELECT status FROM requests WHERE user_id = ? AND kind = 'youtube' AND yt_id = ?").bind(userId, ytId).first() : null;
     return [{ kind: 'youtube', yt_id: ytId, tmdb_id: 0, title: info.title || 'YouTube video ' + ytId, year: null, poster: yt.thumbUrl(ytId),
       overview: info.channel ? 'YouTube · ' + info.channel : 'YouTube', in_library: await yt.inLibrary(env.DB, ytId), requested: mine?.status || null,
-      age_limit: ytBlock && (await ageRefusal(env.DB, user, 'youtube:' + ytId, null)) ? ytBlock : null }];
+      age_limit: (await ageRefusal(env.DB, user, 'youtube:' + ytId, null)) ? 'above' : null }];
   }
   q = q.slice(0, 100);
   if (q.length < 2) return [];
@@ -80,9 +86,9 @@ export async function searchTitles(env, q, user) {
   for (const r of items) {
     const kind = r.media_type, date = r.release_date || r.first_air_date || '';
     const mine = userId ? await env.DB.prepare("SELECT status FROM requests WHERE user_id = ? AND kind = ? AND tmdb_id = ? AND yt_id = ''").bind(userId, kind, r.id).first() : null;
-    const block = await libraryBlock(env.DB, user, kind, r.id);   // in the library but not for this user: don't say it's there
+    const block = await libraryBlock(env.DB, user, kind, r.id);   // in the library but hidden from this user: don't say it's there
     out.push({ kind, tmdb_id: r.id, title: r.title || r.name, year: date ? Number(date.slice(0, 4)) : null, poster: img(r.poster_path),
-      overview: (r.overview || '').slice(0, 300), in_library: !block && await inLibrary(env.DB, kind, r.id), requested: mine?.status || null, age_limit: block });
+      overview: (r.overview || '').slice(0, 300), in_library: !block && await inLibrary(env.DB, kind, r.id), requested: mine?.status || null, age_limit: block === 'above' ? 'above' : null });
   }
   return out;
 }
@@ -132,8 +138,6 @@ export const AUTO_LIST_MAX = 25;   // auto-approve users' playlists up to this m
 
 async function createPlaylistRequest(env, user, b, listId) {
   const db = env.DB, ytId = 'list:' + listId, k = { kind: 'youtube', tmdb_id: 0, yt_id: ytId };
-  const refused = await ageRefusal(db, user, null, null);
-  if (refused) return refused;
   if (await yt.inLibrary(db, ytId)) return { status: 409, body: { error: 'That’s already in the library.' } };
   if (await db.prepare("SELECT 1 FROM requests WHERE user_id = ? AND kind = 'youtube' AND yt_id = ?").bind(user.id, ytId).first())
     return { status: 409, body: { error: 'You’ve already asked for that one.' } };
@@ -155,7 +159,7 @@ async function createPlaylistRequest(env, user, b, listId) {
     else await setTitle(db, k, { status: 'sent', reply: null });
   }
   if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind: 'youtube', yt_id: ytId, note: b.note, auto_error: auto?.error, channel: p.data.channel });
-  return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending' } };
+  return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending', note: user.max_age != null && !user.allow_unrated ? UNRATED_NOTE : null } };
 }
 
 async function createYoutubeRequest(env, user, b) {
@@ -179,14 +183,15 @@ async function createYoutubeRequest(env, user, b) {
   await db.prepare(`INSERT INTO requests(id, user_id, kind, tmdb_id, yt_id, title, year, poster, note, status, reply, created_at, updated_at) VALUES (?,?,'youtube',0,?,?,?,?,?,?,?,?,?)`)
     .bind(row.id, user.id, id, row.title, null, row.poster, String(b.note || '').trim().slice(0, 500) || null, other?.status || 'pending', other?.reply || null, t, t).run();
   let auto = null;
-  // Age-limited users (allowed unrated titles) still go to the owner: YouTube videos have no rating.
+  // Age-limited users' requests always go to the owner (YouTube videos have no rating).
   if (!other && user.auto_approve && user.max_age == null) {
     auto = await yt.addJob(env, id, { by: user.id, title: info.title, channel: info.channel });
     if (auto.error) await db.prepare('UPDATE requests SET reply = ? WHERE id = ?').bind('Not downloaded automatically: ' + auto.error + ' The owner will look at it.', row.id).run();
     else await setTitle(db, k, { status: 'sent', reply: null });
   }
   if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind: 'youtube', yt_id: id, note: b.note, auto_error: auto?.error, channel: info.channel });
-  return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending' } };
+  const unrated = user.max_age != null && !user.allow_unrated && (await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind('youtube:' + id).first())?.age == null;
+  return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending', note: unrated ? UNRATED_NOTE : null } };
 }
 
 export async function createRequest(env, user, b) {
@@ -199,11 +204,18 @@ export async function createRequest(env, user, b) {
   if (open >= MAX_OPEN) return { status: 429, body: { error: `You have ${open} requests waiting. Once some are ready you can ask for more.` } };
   const d = await new Tmdb(env.TMDB_TOKEN).get(`/${kind}/${tmdbId}`, { append_to_response: kind === 'movie' ? 'release_dates' : 'content_ratings' });
   if (!d) return { status: 404, body: { error: 'TMDB doesn’t know that title.' } };
-  if (user.max_age != null) {   // before the library check, so a limited user isn't told a title they can't see is there
-    const refused = await ageRefusal(db, user, (kind === 'movie' ? 'movie:' : 'series:') + tmdbId, ageOf(kind === 'movie' ? pickMovieCert(d.release_dates) : pickTvCert(d.content_ratings)));
+  // Before the library check, so a limited user isn't told that a title hidden from them is there.
+  let unrated = false;
+  if (user.max_age != null) {
+    const key = (kind === 'movie' ? 'movie:' : 'series:') + tmdbId, o = await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind(key).first();
+    const age = o ? o.age : ageOf(kind === 'movie' ? pickMovieCert(d.release_dates) : pickTvCert(d.content_ratings));
+    const lib = await libraryBlock(db, user, kind, tmdbId);
+    const refused = await ageRefusal(db, user, key, age) || (lib === 'above' ? { status: 403, body: { error: 'That one is above your age limit.', age_limit: 'above' } } : null);
     if (refused) return refused;
+    unrated = !user.allow_unrated && (age == null || lib === 'unrated');
   }
-  if (await inLibrary(db, kind, tmdbId)) return { status: 409, body: { error: 'That’s already in the library.' } };
+  // A hidden unrated title that's already in the library is still a request: the owner can give it an age.
+  if (!unrated && await inLibrary(db, kind, tmdbId)) return { status: 409, body: { error: 'That’s already in the library.' } };
   const date = d.release_date || d.first_air_date || '';
   const row = { id: randomHex(12), title: d.title || d.name, year: date ? Number(date.slice(0, 4)) : null, poster: img(d.poster_path) };
   // Someone else already asked: join their request's progress.
@@ -225,7 +237,18 @@ export async function createRequest(env, user, b) {
     else await setTitle(db, keyOf({ kind, tmdb_id: tmdbId }), { status: 'sent', torrent_hash: auto.hash, torrent_name: auto.name, reply: null });
   }
   if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind, note: b.note, auto_error: auto?.error });
-  return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending' } };
+  return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending', note: unrated ? UNRATED_NOTE : null } };
+}
+
+// A requested title arrived but some of the people who asked can't see it (no age rating, or rated above them).
+async function notifyOwnerHidden(env, r, title, users) {
+  const owner = String(env.ADMIN_EMAIL_ALLOWLIST || '').split(',')[0].trim();
+  if (!owner || !env.EMAIL) return;
+  const names = users.map(u => u.display_name || u.username).join(', ');
+  const link = cfg().publicUrl + '/admin#users';
+  await sendEmail(env, { to: owner, subject: `${title} is hidden from ${names}`,
+    text: `${title} is in the library, but ${names} can't see it: it has no age rating (or one above their limit). To let them watch it, give it an age under Users → Age ratings, or allow unrated titles for them: ${link}\n`,
+    html: `<p><b>${esc(title)}</b> is in the library, but ${esc(names)} can’t see it: it has no age rating (or one above their limit). To let them watch it, give it an age under <a href="${link}">Users → Age ratings</a>, or allow unrated titles for them.</p>` });
 }
 
 async function notifyOwner(env, user, r) {
@@ -246,7 +269,18 @@ export async function decide(env, b) {
   const { kind, tmdb_id: tmdbId } = k;
   if (!(await db.prepare(`SELECT 1 FROM requests WHERE kind = ? AND tmdb_id = ? AND yt_id = ? AND status IN ('pending','approved','sent')`).bind(k.kind, k.tmdb_id, k.yt_id).first()))
     return { status: 404, body: { error: 'No open request for that title.' } };
-  if (b.action === 'decline') { await setTitle(db, k, { status: 'declined', reply }); return { status: 200, body: { ok: true } }; }
+  if (b.action === 'decline') {
+    const who = (await db.prepare(`SELECT q.title, q.year, u.email, u.display_name, u.username, u.notify FROM requests q JOIN users u ON u.id = q.user_id
+      WHERE q.kind = ? AND q.tmdb_id = ? AND q.yt_id = ? AND q.status IN ('pending','approved','sent') AND u.disabled = 0`).bind(k.kind, k.tmdb_id, k.yt_id).all()).results;
+    await setTitle(db, k, { status: 'declined', reply, seen_at: null });   // /me shows a notice until they dismiss it
+    for (const u of who) if (u.email && u.notify) {
+      const title = u.title + (u.year ? ` (${u.year})` : '');
+      await sendEmail(env, { to: u.email, subject: `Your request for ${title} was declined`,
+        text: `Hi ${u.display_name || u.username},\n\nYour request for ${title} was declined.${reply ? `\n\nThe owner says: ${reply}` : ''}\n\nYour requests: ${portalUrl(env)}\n`,
+        html: `<p>Hi ${esc(u.display_name || u.username)},</p><p>Your request for <b>${esc(title)}</b> was declined.</p>${reply ? `<p>The owner says: ${esc(reply)}</p>` : ''}<p><a href="${portalUrl(env)}">Your requests</a></p>` });
+    }
+    return { status: 200, body: { ok: true } };
+  }
   if (b.action === 'manual') { await setTitle(db, k, { status: 'approved', reply }); return { status: 200, body: { ok: true } }; }
   if (b.action === 'auto' && kind === 'youtube' && k.yt_id.startsWith('list:')) {   // whole playlist into the YouTube library
     const r = await yt.addPlaylist(env, k.yt_id.slice(5), { quality: b.quality });
@@ -313,11 +347,24 @@ export function describe(r, live) {
   return t.copied ? 'Adding to the library' : 'Downloaded, adding to the library soon';
 }
 
-export async function requestsFor(env, userId) {
-  const rows = (await env.DB.prepare('SELECT * FROM requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').bind(userId).all()).results;
+const HIDDEN_LABEL = 'In the library, waiting for an age rating';
+const HIDDEN_NOTE = 'It has no age rating, so your account doesn’t show it yet. The owner has been told and can give it one.';
+/** `user`: the person (or their id). Declined requests they haven't dismissed carry `notice: true`. */
+export async function requestsFor(env, user) {
+  const db = env.DB, u = typeof user === 'string' ? await db.prepare('SELECT * FROM users WHERE id = ?').bind(user).first() : user;
+  const rows = (await db.prepare('SELECT * FROM requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').bind(u?.id ?? user).all()).results;
   const live = await liveState(env, rows);
-  return rows.map(r => ({ id: r.id, kind: r.kind, tmdb_id: r.tmdb_id, yt_id: r.yt_id || null, title: r.title, year: r.year, poster: r.poster, note: r.note, status: r.status,
-    label: describe(r, live), reply: r.reply, created_at: r.created_at, available_at: r.available_at }));
+  const out = [];
+  for (const r of rows) {
+    const hidden = r.status === 'available' && (await visibleTo(db, u, keyOf(r))) === false;
+    out.push({ id: r.id, kind: r.kind, tmdb_id: r.tmdb_id, yt_id: r.yt_id || null, title: r.title, year: r.year, poster: r.poster, note: r.note, status: r.status,
+      label: hidden ? HIDDEN_LABEL : describe(r, live), reply: hidden ? HIDDEN_NOTE : r.reply, hidden: hidden || undefined,
+      notice: r.status === 'declined' && !r.seen_at ? true : undefined, created_at: r.created_at, available_at: r.available_at });
+  }
+  return out;
+}
+export async function dismissNotice(db, userId, id) {
+  await db.prepare("UPDATE requests SET seen_at = ? WHERE id = ? AND user_id = ? AND status = 'declined'").bind(now(), String(id || ''), userId).run();
 }
 
 // Owner view: one entry per title, with who asked.
@@ -347,12 +394,23 @@ export async function refreshRequests(env) {
     const k = keyOf(r);
     if (!(await inLib(db, k))) continue;
     if (k.kind === 'youtube' && !k.yt_id.startsWith('list:') && !(await yt.itemFor(db, k.yt_id))) continue;   // on the storage host, not in the catalog yet
-    const who = (await db.prepare(`SELECT u.email, u.display_name, u.username, u.notify FROM requests q JOIN users u ON u.id = q.user_id
+    const who = (await db.prepare(`SELECT u.id, u.email, u.display_name, u.username, u.notify, u.max_age, u.allow_unrated FROM requests q JOIN users u ON u.id = q.user_id
       WHERE q.kind = ? AND q.tmdb_id = ? AND q.yt_id = ? AND q.status IN ('pending','approved','sent') AND u.disabled = 0`).bind(k.kind, k.tmdb_id, k.yt_id).all()).results;
+    const hidden = [];
+    let built = true;
+    for (const u of who) { const v = await visibleTo(db, u, k); if (v === null) built = false; else if (!v) hidden.push(u); }
+    if (!built) continue;   // files are there but the catalog hasn't caught up: decide (and email) next time
     await setTitle(db, k, { status: 'available', available_at: now() });
     n++;
+    const title = r.title + (r.year ? ` (${r.year})` : '');
+    if (hidden.length) await notifyOwnerHidden(env, r, title, hidden);
     for (const u of who) if (u.email && u.notify) {
-      const title = r.title + (r.year ? ` (${r.year})` : '');
+      if (hidden.includes(u)) {
+        await sendEmail(env, { to: u.email, subject: `${title} is in the library, waiting for an age rating`,
+          text: `Hi ${u.display_name || u.username},\n\n${title}, which you asked for, is now in the library. ${HIDDEN_NOTE}\n\nYour requests: ${portalUrl(env)}\n`,
+          html: `<p>Hi ${esc(u.display_name || u.username)},</p><p><b>${esc(title)}</b>, which you asked for, is now in the library. ${esc(HIDDEN_NOTE)}</p><p><a href="${portalUrl(env)}">Your requests</a></p>` });
+        continue;
+      }
       await sendEmail(env, { to: u.email, subject: `${title} is ready to watch`,
         text: `Hi ${u.display_name || u.username},\n\n${title}, which you asked for, is now in the library. It shows up in your app under ${shelf(r.kind)} (pull to refresh if it isn't there yet).\n\nYour requests: ${portalUrl(env)}\n`,
         html: `<p>Hi ${esc(u.display_name || u.username)},</p><p><b>${esc(title)}</b>, which you asked for, is now in the library. It shows up in your app under ${shelf(r.kind)} (pull to refresh if it isn’t there yet).</p><p><a href="${portalUrl(env)}">Your requests</a></p>` });

@@ -89,13 +89,12 @@ test('YouTube requests: link search, auto-approve sends to the box, job mirrored
   assert.equal(s.length, 1); assert.equal(s[0].kind, 'youtube'); assert.equal(s[0].title, 'Never Gonna Give You Up'); assert.equal(s[0].in_library, false);
   assert.equal((await createRequest(env, await user('ub'), { kind: 'youtube', yt_id: 'zzzzzzzzzzz' })).status, 404, 'unknown video');
 
-  // Age-limited without unrated titles: YouTube is unrated, so it's refused up front (and search says so).
-  assert.equal((await searchTitles(env, `https://youtu.be/${VID}`, await user('un')))[0].age_limit, 'unrated');
-  const no = await createRequest(env, await user('un'), { kind: 'youtube', yt_id: VID });
-  assert.equal(no.status, 403); assert.match(no.body.error, /no age rating/);
-  assert.equal(sent.length, 0, 'the owner isn’t bothered');
+  // Age-limited without unrated titles: still goes to the owner, with a note saying why (videos have no rating).
+  const yn = await createRequest(env, await user('un'), { kind: 'youtube', yt_id: VID });
+  assert.equal(yn.body.status, 'pending'); assert.match(yn.body.note, /no age rating/);
+  assert.equal(sent.at(-1).to, 'owner@example.com'); sent.length = 0;
   // Kid (age-limited, unrated allowed, auto-approve) → owner decides; nothing sent to the box.
-  assert.equal((await searchTitles(env, `https://youtu.be/${VID}`, await user('uk')))[0].age_limit, null);
+  assert.equal((await searchTitles(env, `https://youtu.be/${VID}`, await user('un')))[0].age_limit, null, 'search doesn’t block YouTube');
   assert.equal((await createRequest(env, await user('uk'), { kind: 'youtube', url: `https://www.youtube.com/watch?v=${VID}` })).body.status, 'pending');
   assert.equal(box.size, 0);
   assert.equal(sent.at(-1).to, 'owner@example.com');
@@ -108,7 +107,7 @@ test('YouTube requests: link search, auto-approve sends to the box, job mirrored
   box.get(VID).status = 'downloading'; box.get(VID).progress = 0.4;
   assert.equal((await requestsFor(env, 'ua'))[0].label, 'Downloading 40%');
   await decide(env, { kind: 'youtube', yt_id: VID, action: 'auto' });   // owner approves the kid's: same job
-  assert.equal((await d.prepare("SELECT count(*) n FROM requests WHERE status = 'sent'").first()).n, 2);
+  assert.equal((await d.prepare("SELECT count(*) n FROM requests WHERE status = 'sent'").first()).n, 3, 'alice, the kid and the young one');
 
   // The box finishes → copied; the sync brings it into the library → added; both are told.
   Object.assign(box.get(VID), { status: 'done', progress: 1, path: PATH, size: 1000, title: 'Never Gonna Give You Up', channel: 'Rick Astley' });
@@ -121,8 +120,13 @@ test('YouTube requests: link search, auto-approve sends to the box, job mirrored
   assert.equal((await d.prepare('SELECT status FROM yt_jobs').first()).status, 'added');
   sent.length = 0;
   assert.equal(await refreshRequests(env), 1);
-  assert.deepEqual(sent.map(m => m.to).sort(), ['a@example.com', 'k@example.com']);
-  assert.match(sent[0].text, /under YouTube/);
+  // The young one can't see unrated videos: told it's waiting for an age rating, and the owner is told who can't see it.
+  assert.deepEqual(sent.map(m => m.to).sort(), ['a@example.com', 'k@example.com', 'owner@example.com', 'y@example.com']);
+  assert.match(sent.find(m => m.to === 'a@example.com').text, /under YouTube/);
+  assert.match(sent.find(m => m.to === 'y@example.com').subject, /waiting for an age rating/);
+  assert.match(sent.find(m => m.to === 'owner@example.com').subject, /hidden from young/);
+  assert.equal((await requestsFor(env, 'un'))[0].label, 'In the library, waiting for an age rating');
+  assert.equal((await requestsFor(env, 'uk'))[0].label, 'Ready to watch');
   assert.equal((await searchTitles(env, `https://youtu.be/${VID}`, 'ub'))[0].in_library, true);
 });
 

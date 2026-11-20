@@ -4,7 +4,7 @@
 // plus the library. Nothing here touches /admin, the download box or anyone else's data.
 import { verifyAccessJwt } from './access.mjs';
 import { userStatus, listDevices, signOut, setPassword, passphrase, serverUrl, INVITE_DAYS } from './users.mjs';
-import { searchTitles, createRequest, requestsFor, refreshRequests, MAX_OPEN } from './requests.mjs';
+import { searchTitles, createRequest, requestsFor, refreshRequests, dismissNotice, MAX_OPEN } from './requests.mjs';
 import { MIN_PASSWORD_LENGTH } from './passwords.mjs';
 import { handlePlayer, watchHtml, libraryItems, WATCH_CSS, WATCH_JS } from './player.mjs';
 import { authorize as qcAuthorize } from './quickconnect.mjs';
@@ -60,10 +60,11 @@ async function api(request, env, ctx, path, url, user) {
   if (path === '/me/api/state') return json({
     user: { username: user.username, name: user.display_name, email: user.email, notify: !!user.notify },
     devices: (await listDevices(db, user.id)).map(({ user_id, username, display_name, ...d }) => d),
-    requests: await requestsFor(env, user.id), max_open: MAX_OPEN
+    requests: await requestsFor(env, user), max_open: MAX_OPEN
   });
   if (path === '/me/api/search') return json({ results: await searchTitles(env, url.searchParams.get('q'), user) });
   if (path === '/me/api/request' && request.method === 'POST') return r(await createRequest(env, user, body));
+  if (path === '/me/api/dismiss' && request.method === 'POST') { await dismissNotice(db, user.id, body.id); return json({ ok: true }); }
   if (path === '/me/api/cancel' && request.method === 'POST') {
     await db.prepare("DELETE FROM requests WHERE id = ? AND user_id = ? AND status IN ('pending','declined','available')").bind(String(body.id || ''), user.id).run();
     return json({ ok: true });
@@ -113,7 +114,7 @@ code,.code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(
 .res p{margin:2px 0 0;font-size:13px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;background:var(--surface-2)}.pill.ok{color:var(--good)}.pill.no{color:var(--bad)}.pill.on{color:var(--accent)}
 details{border-top:1px solid var(--line);padding:10px 0}details:first-of-type{border-top:0}summary{cursor:pointer;font-weight:600}
-.msg{border-radius:10px;padding:10px 14px;margin:10px 0;background:color-mix(in srgb,var(--good) 14%,var(--surface));border:1px solid color-mix(in srgb,var(--good) 40%,var(--line))}.msg.err{background:color-mix(in srgb,var(--bad) 12%,var(--surface));border-color:color-mix(in srgb,var(--bad) 45%,var(--line))}
+.notice{position:relative;padding-right:40px}.notice .x{position:absolute;top:6px;right:6px;background:none;border:0;color:inherit;font-size:20px;line-height:1;padding:4px 8px;cursor:pointer}.msg{border-radius:10px;padding:10px 14px;margin:10px 0;background:color-mix(in srgb,var(--good) 14%,var(--surface));border:1px solid color-mix(in srgb,var(--good) 40%,var(--line))}.msg.err{background:color-mix(in srgb,var(--bad) 12%,var(--surface));border-color:color-mix(in srgb,var(--bad) 45%,var(--line))}
 .theme{margin-left:auto;width:34px;height:34px;padding:0;display:grid;place-items:center;background:transparent;border-color:var(--line);color:var(--muted)}
 @media (max-width:600px){header{flex-wrap:wrap}nav{order:3;flex-basis:100%}.tab{padding:7px 9px}.res{grid-template-columns:52px 1fr}.res img{width:52px;height:78px}.res img.yt{height:29px}.res>:last-child{grid-column:2}.kv{grid-template-columns:1fr}.kv b{margin-top:6px}}`;
 
@@ -152,6 +153,7 @@ $('#acc').onsubmit = async e => { e.preventDefault();
 function mainHtml(env, u) {
   const server = esc(serverUrl(env));
   return `
+<div id=notices></div>
 <section class=pane id=start>
 <h2>Connect your TV or phone</h2>
 <div class=card><div class=kv><b>Server</b><span><code>${server}</code></span><b>Username</b><span><code>${esc(u.username)}</code></span><b>Password</b><span>the one you chose (change it under Account)</span></div></div>
@@ -228,8 +230,9 @@ async function state() {
   try {
     const d = await api('state');
     $('#devs').innerHTML = d.devices.map(x => '<div class=res style="grid-template-columns:1fr auto"><div><b>' + esc(x.device_name || 'Unknown device') + '</b> <span class=muted>' + esc((x.client || '') + (x.client_version ? ' ' + x.client_version : '')) + '</span><p>Last used ' + ago(x.last_seen) + (x.place ? ' · ' + esc(x.place) : '') + ' · signed in ' + new Date(x.created_at * 1000).toLocaleDateString() + '</p></div><button class=quiet data-out="' + x.id + '">Sign out</button></div>').join('') || '<p class=hint style="margin:0">No apps are signed in yet. Follow <a href="#start">Get started</a>.</p>';
+    $('#notices').innerHTML = d.requests.filter(r => r.notice).map(r => '<div class="msg err notice"><button class=x data-dismiss="' + r.id + '" aria-label="Dismiss" title="Dismiss">×</button>Your request for <b>' + esc(r.title) + (r.year ? ' (' + r.year + ')' : '') + '</b> was declined.' + (r.reply ? ' The owner says: ' + esc(r.reply) : '') + ' <a href="#requests">Your requests</a></div>').join('');
     $('#reqs').innerHTML = d.requests.map(r => {
-      const cls = r.status === 'available' ? 'ok' : r.status === 'declined' ? 'no' : 'on';
+      const cls = r.hidden ? 'on' : r.status === 'available' ? 'ok' : r.status === 'declined' ? 'no' : 'on';
       return '<div class=res>' + (r.poster ? '<img alt=""' + (r.kind === 'youtube' ? ' class=yt referrerpolicy=no-referrer' : '') + ' src="' + esc(r.poster) + '">' : '<span></span>') + '<div><b>' + esc(r.title) + '</b> <span class=muted>' + (r.year ? r.year + ' · ' : '') + kindName(r.kind) + '</span><br><span class="pill ' + cls + '">' + esc(r.label) + '</span>' +
         (r.reply ? '<p>' + esc(r.reply) + '</p>' : '') + (r.note ? '<p>Your note: ' + esc(r.note) + '</p>' : '') + '</div>' +
         (['pending', 'declined', 'available'].includes(r.status) ? '<button class=quiet data-cancel="' + r.id + '">' + (r.status === 'pending' ? 'Withdraw' : 'Remove') + '</button>' : '<span></span>') + '</div>';
@@ -240,6 +243,7 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   try {
     if (b.dataset.out) { b.disabled = true; await api('signout', { id: b.dataset.out }); state(); }
+    if (b.dataset.dismiss) { b.disabled = true; await api('dismiss', { id: b.dataset.dismiss }); state(); }
     if (b.dataset.cancel) { b.disabled = true; await api('cancel', { id: b.dataset.cancel }); state(); }
     if (b.dataset.unshare) { if (!confirm('Turn this link off? Anyone who has it won’t be able to watch any more.')) return; b.disabled = true; await api('shares/revoke', { id: b.dataset.unshare }); shares(); }
     if (b.dataset.req) {
@@ -247,7 +251,9 @@ document.addEventListener('click', async e => {
       if (note === null) return;
       b.disabled = true; b.textContent = 'Asking…';
       const r = await api('request', b.dataset.yt ? { kind: 'youtube', yt_id: b.dataset.yt, note } : { kind: b.dataset.kind, tmdb_id: Number(b.dataset.req), note });
-      b.textContent = r.status === 'sent' ? 'Downloading' : 'Requested'; state();
+      b.textContent = r.status === 'sent' ? 'Downloading' : 'Requested';
+      if (r.note) $('#smsg').innerHTML = '<div class=msg>' + esc(r.note) + '</div>';
+      state();
     }
   } catch (err) { b.disabled = false; $('#smsg').innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; if (b.dataset.req) b.textContent = 'Ask for it'; }
 });
