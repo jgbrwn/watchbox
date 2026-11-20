@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
 import { openLocalDb } from '../tools/local-db.mjs';
 import { handleUsers, passphrase, userStatus } from '../src/users.mjs';
-import { createRequest, decide, refreshRequests, requestsFor, pickTorrent, searchTitles, dismissNotice } from '../src/requests.mjs';
+import { createRequest, decide, refreshRequests, requestsFor, pickTorrent, searchTitles, dismissNotice, requestsForOwner, ageHint } from '../src/requests.mjs';
 import { handleJellyfin } from '../src/jellyfin.mjs';
 import { hashPassword } from '../src/passwords.mjs';
 
@@ -157,6 +157,7 @@ test('age limits on requests: above the limit refused; unrated goes to the owner
   r = await createRequest(env, kid, { kind: 'movie', tmdb_id: 3 });
   assert.equal(r.body.status, 'pending'); assert.match(r.body.note, /no age rating/);
   assert.equal(sent.at(-1).to, 'owner@example.com');
+  assert.match(sent.at(-1).text, /Age: No age rating, and kid’s limit is 12: .* age of 12 or under .* If you wouldn’t be comfortable rating it 12 or under, decline it\./);
   r = await createRequest(env, kid, { kind: 'movie', tmdb_id: 6 });
   assert.equal(r.body.status, 'pending', 'hidden unrated title already in the library: still a request');
   assert.equal((await createRequest(env, kid, { kind: 'movie', tmdb_id: 4 })).body.note, null, 'override to all ages: rated');
@@ -164,16 +165,31 @@ test('age limits on requests: above the limit refused; unrated goes to the owner
   assert.equal((await createRequest(env, teen, { kind: 'movie', tmdb_id: 3 })).body.note, null, 'unrated allowed for the teen');
   assert.equal((await createRequest(env, teen, { kind: 'movie', tmdb_id: 6 })).status, 409, 'the teen can see it: already in the library');
 
+  // The owner's Pipeline card says which age it needs; people allowed unrated (the teen) don't count.
+  const card = async id => (await requestsForOwner(env)).find(x => x.tmdb_id === id);
+  assert.match((await card(3)).age_hint, /kid’s limit is 12/);
+  assert.equal((await card(2)).age_hint, undefined, 'rated titles need no hint');
+  assert.equal((await card(4)).age_hint, undefined, 'already given an age the kid can see');
+  ins("INSERT INTO age_overrides(key, age, at) VALUES ('movie:3', 16, 0)");
+  assert.match((await card(3)).age_hint, /12 or under/, 'rated above the kid: hint stays');
+  d.raw.prepare("UPDATE age_overrides SET age = 10 WHERE key = 'movie:3'").run();
+  assert.equal((await card(3)).age_hint, undefined, 'rated 10: the kid can watch it');
+  d.raw.prepare("DELETE FROM age_overrides WHERE key = 'movie:3'").run();
+  assert.match(ageHint([{ name: 'A', max_age: 12 }, { name: 'B', max_age: 7 }]), /B 7, A 12\. If you wouldn’t be comfortable rating it 7 or under/);
+
   // The hidden one "arrives": the kid hears it's waiting for an age rating, the owner hears who can't see it.
   sent.length = 0;
   await refreshRequests(env);
   assert.deepEqual(sent.map(m => m.to).sort(), ['k@example.com', 'owner@example.com']);
   assert.match(sent.find(m => m.to === 'k@example.com').subject, /waiting for an age rating/);
   assert.match(sent.find(m => m.to === 'owner@example.com').subject, /hidden from kid/);
+  assert.match(sent.find(m => m.to === 'owner@example.com').text, /give it an age of 12 or under/);
+  assert.match((await card(6)).age_hint, /kid can’t see it yet: .* 12 or under/);
   const six = (await requestsFor(env, kid)).find(x => x.tmdb_id === 6);
   assert.equal(six.label, 'In the library, waiting for an age rating'); assert.equal(six.hidden, true);
   ins("INSERT INTO age_overrides(key, age, at) VALUES ('movie:6', 0, 0)"); d.raw.prepare("UPDATE items SET age = 0 WHERE id = 'i6'").run();
   assert.equal((await requestsFor(env, kid)).find(x => x.tmdb_id === 6).label, 'Ready to watch', 'once rated it shows');
+  assert.equal((await card(6)).age_hint, undefined);
 
   // Declined: email, and a notice on /me until dismissed.
   sent.length = 0;

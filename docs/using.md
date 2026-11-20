@@ -101,7 +101,9 @@ an age under Users → Age ratings. Give kids their own login: a TV signed in as
 Requests: a limited person can't ask for a title rated above their limit (/me's search marks the ones already in the
 library; asking for others is refused with the reason, and you aren't emailed). Unrated titles and YouTube videos
 still come to you, and they're told that it has no age rating and you'll decide. Everything a limited person asks for
-comes to you to approve, even with auto-approve on. If one you approve arrives while it's still hidden from them, they
-see "In the library, waiting for an age rating" and you get an email saying who can't see it: give it an age under
-Users → Age ratings. When you decline a request, the people who asked get an email (if they have one) and a notice on
+comes to you to approve, even with auto-approve on. For an unrated title, the request email and its card on Pipeline
+say which age you'd have to give it for them to watch it (at or under their limit, e.g. "12 or under"); if you
+wouldn't be comfortable rating it that low, decline it. If one you approve arrives while it's still hidden from them,
+they see "In the library, waiting for an age rating" and you get an email saying who can't see it and the age it
+needs: give it that age under Users → Age ratings (an age above their limit keeps it hidden from them). When you decline a request, the people who asked get an email (if they have one) and a notice on
 /me until they dismiss it.

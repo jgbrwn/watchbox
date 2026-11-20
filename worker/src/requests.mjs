@@ -40,6 +40,24 @@ export async function ageRefusal(db, user, key, age) {
   if (age == null || age <= user.max_age) return null;
   return { status: 403, body: { error: `That one is rated ${age}+, above your age limit.`, age_limit: 'above' } };
 }
+/** For the owner: what age an unrated title needs for limited people (who can't see unrated titles) to watch it.
+ *  `people`: [{ name, max_age }]. `arrived`: it's in the library already. */
+export function ageHint(people, arrived = false) {
+  if (!people.length) return null;
+  const ps = [...people].sort((a, b) => a.max_age - b.max_age), low = ps[0].max_age;
+  const where = 'Users → Age ratings';
+  if (ps.length === 1) {
+    const n = ps[0].name;
+    return arrived
+      ? `${n} can’t see it yet: it has no age rating and ${n}’s limit is ${low}. To let ${n} watch it, give it an age of ${low} or under (${where}).`
+      : `No age rating, and ${n}’s limit is ${low}: once it’s in the library, ${n} can only watch it if you give it an age of ${low} or under (${where}). If you wouldn’t be comfortable rating it ${low} or under, decline it.`;
+  }
+  const list = ps.map(p => `${p.name} ${p.max_age}`).join(', ');
+  return arrived
+    ? `Hidden from some of the people who asked: it has no age rating. Each can watch it once you give it an age at or under their limit (${where}): ${list}.`
+    : `No age rating. Once it’s in the library, each person can only watch it if you give it an age at or under their limit (${where}): ${list}. If you wouldn’t be comfortable rating it ${low} or under, decline it, or accept that only some of them will see it.`;
+}
+const limitedOf = us => us.filter(u => u.max_age != null && !u.allow_unrated).map(u => ({ name: u.display_name || u.username, max_age: u.max_age }));
 const UNRATED_NOTE = 'This one has no age rating, so your account won’t show it on its own. Your request went to the owner, who decides whether to add it and whether you can watch it.';
 /** A library title's age for a limited user: "above" | "unrated" when it's hidden from them, else null (fine, or not there). */
 async function libraryBlock(db, user, kind, tmdbId) {
@@ -158,7 +176,8 @@ async function createPlaylistRequest(env, user, b, listId) {
     if (auto.error) await db.prepare('UPDATE requests SET reply = ? WHERE id = ?').bind('Not downloaded automatically: ' + auto.error + ' The owner will look at it.', row.id).run();
     else await setTitle(db, k, { status: 'sent', reply: null });
   }
-  if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind: 'youtube', yt_id: ytId, note: b.note, auto_error: auto?.error, channel: p.data.channel });
+  await db.prepare('UPDATE requests SET unrated = 1 WHERE id = ?').bind(row.id).run();
+  if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind: 'youtube', yt_id: ytId, note: b.note, auto_error: auto?.error, channel: p.data.channel, unrated: true });
   return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending', note: user.max_age != null && !user.allow_unrated ? UNRATED_NOTE : null } };
 }
 
@@ -189,8 +208,10 @@ async function createYoutubeRequest(env, user, b) {
     if (auto.error) await db.prepare('UPDATE requests SET reply = ? WHERE id = ?').bind('Not downloaded automatically: ' + auto.error + ' The owner will look at it.', row.id).run();
     else await setTitle(db, k, { status: 'sent', reply: null });
   }
-  if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind: 'youtube', yt_id: id, note: b.note, auto_error: auto?.error, channel: info.channel });
-  const unrated = user.max_age != null && !user.allow_unrated && (await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind('youtube:' + id).first())?.age == null;
+  const ytAge = (await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind('youtube:' + id).first())?.age ?? null;
+  if (ytAge == null) await db.prepare('UPDATE requests SET unrated = 1 WHERE id = ?').bind(row.id).run();
+  if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind: 'youtube', yt_id: id, note: b.note, auto_error: auto?.error, channel: info.channel, unrated: ytAge == null });
+  const unrated = user.max_age != null && !user.allow_unrated && ytAge == null;
   return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending', note: unrated ? UNRATED_NOTE : null } };
 }
 
@@ -205,10 +226,10 @@ export async function createRequest(env, user, b) {
   const d = await new Tmdb(env.TMDB_TOKEN).get(`/${kind}/${tmdbId}`, { append_to_response: kind === 'movie' ? 'release_dates' : 'content_ratings' });
   if (!d) return { status: 404, body: { error: 'TMDB doesn’t know that title.' } };
   // Before the library check, so a limited user isn't told that a title hidden from them is there.
+  const key = (kind === 'movie' ? 'movie:' : 'series:') + tmdbId, o = await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind(key).first();
+  const age = o ? o.age : ageOf(kind === 'movie' ? pickMovieCert(d.release_dates) : pickTvCert(d.content_ratings));
   let unrated = false;
   if (user.max_age != null) {
-    const key = (kind === 'movie' ? 'movie:' : 'series:') + tmdbId, o = await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind(key).first();
-    const age = o ? o.age : ageOf(kind === 'movie' ? pickMovieCert(d.release_dates) : pickTvCert(d.content_ratings));
     const lib = await libraryBlock(db, user, kind, tmdbId);
     const refused = await ageRefusal(db, user, key, age) || (lib === 'above' ? { status: 403, body: { error: 'That one is above your age limit.', age_limit: 'above' } } : null);
     if (refused) return refused;
@@ -236,7 +257,8 @@ export async function createRequest(env, user, b) {
     if (auto.error) await db.prepare('UPDATE requests SET reply = ? WHERE id = ?').bind('Not downloaded automatically: ' + auto.error + ' The owner will look at it.', row.id).run();
     else await setTitle(db, keyOf({ kind, tmdb_id: tmdbId }), { status: 'sent', torrent_hash: auto.hash, torrent_name: auto.name, reply: null });
   }
-  if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind, note: b.note, auto_error: auto?.error });
+  if (age == null) await db.prepare('UPDATE requests SET unrated = 1 WHERE id = ?').bind(row.id).run();
+  if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind, note: b.note, auto_error: auto?.error, unrated: age == null });
   return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending', note: unrated ? UNRATED_NOTE : null } };
 }
 
@@ -246,9 +268,12 @@ async function notifyOwnerHidden(env, r, title, users) {
   if (!owner || !env.EMAIL) return;
   const names = users.map(u => u.display_name || u.username).join(', ');
   const link = cfg().publicUrl + '/admin#users';
+  const limited = limitedOf(users);
+  const why = limited.length === users.length ? ageHint(limited, true)
+    : `${names} can’t see it: it has an age rating above their limit (${users.map(u => `${u.display_name || u.username} ${u.max_age}`).join(', ')}). You can change its age under Users → Age ratings.`;
   await sendEmail(env, { to: owner, subject: `${title} is hidden from ${names}`,
-    text: `${title} is in the library, but ${names} can't see it: it has no age rating (or one above their limit). To let them watch it, give it an age under Users → Age ratings, or allow unrated titles for them: ${link}\n`,
-    html: `<p><b>${esc(title)}</b> is in the library, but ${esc(names)} can’t see it: it has no age rating (or one above their limit). To let them watch it, give it an age under <a href="${link}">Users → Age ratings</a>, or allow unrated titles for them.</p>` });
+    text: `${title} is in the library. ${why}\n\n${link}\n`,
+    html: `<p><b>${esc(title)}</b> is in the library. ${esc(why)}</p><p><a href="${link}">Users → Age ratings</a></p>` });
 }
 
 async function notifyOwner(env, user, r) {
@@ -256,10 +281,11 @@ async function notifyOwner(env, user, r) {
   if (!owner || !env.EMAIL) return;
   const who = user.display_name || user.username;
   const link = cfg().publicUrl + '/admin#requests';
+  const hint = r.unrated ? ageHint(limitedOf([user])) : null;
   const ytLink = r.kind !== 'youtube' ? '' : String(r.yt_id).startsWith('list:') ? `\nhttps://www.youtube.com/playlist?list=${r.yt_id.slice(5)}` : `\nhttps://www.youtube.com/watch?v=${r.yt_id || ''}`;
   await sendEmail(env, { to: owner, subject: `Request: ${r.title}${r.year ? ` (${r.year})` : ''}`,
-    text: `${who} asked for ${kindWord(r.kind)} ${r.title}${r.year ? ` (${r.year})` : ''}${r.channel ? ` from ${r.channel}` : ''}.${ytLink}${r.note ? `\n\nNote: ${r.note}` : ''}${r.auto_error ? `\n\nAutomatic download didn't happen: ${r.auto_error}` : ''}\n\nApprove or decline: ${link}\n`,
-    html: `<p>${esc(who)} asked for ${kindWord(r.kind)} <b>${esc(r.title)}${r.year ? ` (${r.year})` : ''}</b>${r.channel ? ` from ${esc(r.channel)}` : ''}.${ytLink ? ` <a href="${esc(ytLink.trim())}">Open on YouTube</a>` : ''}</p>${r.note ? `<p>Note: ${esc(r.note)}</p>` : ''}${r.auto_error ? `<p>Automatic download didn't happen: ${esc(r.auto_error)}</p>` : ''}<p><a href="${link}">Approve or decline</a></p>` });
+    text: `${who} asked for ${kindWord(r.kind)} ${r.title}${r.year ? ` (${r.year})` : ''}${r.channel ? ` from ${r.channel}` : ''}.${ytLink}${r.note ? `\n\nNote: ${r.note}` : ''}${r.auto_error ? `\n\nAutomatic download didn't happen: ${r.auto_error}` : ''}${hint ? `\n\nAge: ${hint}` : ''}\n\nApprove or decline: ${link}\n`,
+    html: `<p>${esc(who)} asked for ${kindWord(r.kind)} <b>${esc(r.title)}${r.year ? ` (${r.year})` : ''}</b>${r.channel ? ` from ${esc(r.channel)}` : ''}.${ytLink ? ` <a href="${esc(ytLink.trim())}">Open on YouTube</a>` : ''}</p>${r.note ? `<p>Note: ${esc(r.note)}</p>` : ''}${r.auto_error ? `<p>Automatic download didn't happen: ${esc(r.auto_error)}</p>` : ''}${hint ? `<p><b>Age:</b> ${esc(hint)}</p>` : ''}<p><a href="${link}">Approve or decline</a></p>` });
 }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -369,7 +395,8 @@ export async function dismissNotice(db, userId, id) {
 
 // Owner view: one entry per title, with who asked.
 export async function requestsForOwner(env) {
-  const rows = (await env.DB.prepare(`SELECT r.*, u.username, u.display_name FROM requests r JOIN users u ON u.id = r.user_id
+  const db = env.DB;
+  const rows = (await db.prepare(`SELECT r.*, u.username, u.display_name, u.max_age, u.allow_unrated FROM requests r JOIN users u ON u.id = r.user_id
     WHERE r.status IN ('pending','approved','sent') OR r.updated_at > ? ORDER BY r.created_at`).bind(now() - 14 * 86400).all()).results;
   const live = await liveState(env, rows);
   const by = new Map();
@@ -379,7 +406,25 @@ export async function requestsForOwner(env) {
       reply: r.reply, torrent_name: r.torrent_name, created_at: r.created_at, people: [] });
     const g = by.get(k);
     g.people.push({ name: r.display_name || r.username, note: r.note });
+    if (r.unrated) g.unrated = true;
+    if (r.status !== 'declined') (g.limited ||= []).push(r);
     if (OPEN.includes(r.status)) { g.status = r.status; g.label = describe(r, live); }
+  }
+  // Unrated titles asked for by limited people: which age they'd need, until it's rated so they can see it.
+  for (const g of by.values()) {
+    const ppl = g.unrated && g.status !== 'declined' ? (g.limited || []) : [];
+    delete g.limited; delete g.unrated;
+    const k = keyOf(g), need = [];
+    for (const u of limitedOf(ppl)) {
+      const vis = await visibleTo(db, { max_age: u.max_age, allow_unrated: 0 }, k);
+      if (vis === true) continue;   // rated now, and they can see it
+      if (vis === null) {   // not in the library yet: an age you've already set counts
+        const o = await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind(k.kind === 'youtube' ? 'youtube:' + k.yt_id : (k.kind === 'movie' ? 'movie:' : 'series:') + k.tmdb_id).first();
+        if (o?.age != null && o.age <= u.max_age) continue;
+      }
+      need.push(u);
+    }
+    if (need.length) g.age_hint = ageHint(need, g.status === 'available');
   }
   const order = { pending: 0, approved: 1, sent: 2, available: 3, declined: 4 };
   return [...by.values()].sort((a, b) => order[a.status] - order[b.status] || b.created_at - a.created_at);
