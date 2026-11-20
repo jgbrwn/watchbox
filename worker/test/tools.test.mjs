@@ -117,7 +117,7 @@ test('only finished downloads directly under the save path are sent', () => {
   assert.equal(readyName(t('/home/freebsd/media/Movie', { state: 'moving' })), null);
 });
 
-import { seedState } from '../src/pipeline.mjs';
+import { seedState, finishPending, kvGet, kvSet } from '../src/pipeline.mjs';
 test('seeding goal: ratio or hours, whichever comes first', () => {
   const s = { seed_ratio: 1, seed_hours: 72 };
   assert.equal(seedState({ ratio: 0.3, seeding_time: 3600 }, s).done, false);
@@ -129,6 +129,37 @@ test('seeding goal: ratio or hours, whichever comes first', () => {
 // A cut-off response from the storage host or TMDB is retried, and named if it keeps happening.
 import { fetchListing as _fetchListing } from '../src/origin.mjs';
 import { Tmdb as _Tmdb } from '../src/library/tmdb.mjs';
+test('a removal that failed (qBittorrent timed out) is tried again later, after re-verifying the copy', async () => {
+  const { openLocalDb } = await import('../tools/local-db.mjs');
+  const { readdirSync } = await import('node:fs');
+  const { cfg } = await import('../src/config.mjs');
+  const MIG = new URL('../migrations/', import.meta.url).pathname;
+  const d = openLocalDb(':memory:', { migrations: readdirSync(MIG).sort().map(f => MIG + f) });
+  const hash = 'b'.repeat(40), name = 'Old Film (1956) [1080p]';
+  d.raw.prepare(`INSERT INTO files(id,root,path,library,kind,size,mtime,match_key,match_status,added_at) VALUES ('f',?,?,'movies','movie',100,0,'k','matched',0)`).run(cfg().primary.movies, name + '/film.mkv');
+  const t0 = Math.floor(Date.now() / 1000);
+  await kvSet(d, 'push:7', { job: 7, name, kind: 'movie', hash, at: t0 - 3 * 86400, finished: t0 - 3 * 86400, status: 'completed', cleanup: { error: 'qBittorrent: The operation was aborted due to timeout' } });
+  let deleted = 0, size = 100;
+  globalThis.fetch = async (url, init) => {
+    const u = new URL(String(url));
+    if (u.pathname === '/api/v2/torrents/info') return Response.json([{ hash, name, ratio: 1.4, seeding_time: 260000 }]);
+    if (u.pathname === '/api/v2/torrents/files') return Response.json([{ name: name + '/film.mkv', size }]);
+    if (u.pathname === '/api/v2/torrents/delete') { deleted++; return new Response('Ok.'); }
+    throw new Error('unexpected ' + url);
+  };
+  const env = { DB: d, TOOLS_AUTHORIZATION: 'Basic eDp5', TOOLS: { dl: { name: 'qBittorrent', upstream: 'https://dl.example.net' } } };
+  size = 99;   // the copy doesn't match: nothing deleted, tried again later
+  await finishPending(env);
+  let rec = await kvGet(d, 'push:7');
+  assert.equal(deleted, 0); assert.match(rec.cleanup.error, /size differs/); assert.equal(rec.cleanup.tries, 1);
+  await finishPending(env);
+  assert.equal((await kvGet(d, 'push:7')).cleanup.tries, 1, 'not again within 10 minutes');
+  rec.cleanup.at -= 601; await kvSet(d, 'push:7', rec); size = 100;
+  await finishPending(env);
+  rec = await kvGet(d, 'push:7');
+  assert.equal(deleted, 1); assert.ok(rec.cleanup.removed); assert.equal(rec.cleanup.error, undefined);
+});
+
 test('incomplete JSON from the listing or TMDB is retried', async () => {
   const env = { ORIGIN_BASE_URL: 'https://o.example/', ORIGIN_AUTHORIZATION: 'Basic x' };
   let n = 0;

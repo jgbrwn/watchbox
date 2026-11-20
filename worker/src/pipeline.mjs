@@ -214,6 +214,7 @@ export async function finishPush(env, jobId, status, { sync = true } = {}) {
       await scanOnly(env);
       const problem = await verifyOnHostbrr(env, rec);
       rec.cleanup = problem ? { error: problem } : await cleanupIfDone(env, rec, settings);
+      if (rec.cleanup.error) rec.cleanup.at = now();
     }
   } else if (rec.hash && !rec.batch) {
     await env.DB.prepare('DELETE FROM kv WHERE key=?').bind(`pushed:${rec.hash}`).run();   // allow a retry
@@ -231,8 +232,12 @@ export async function finishPending(env) {
   const settings = await getSettings(env.DB);
   for (const r of rows) {
     const rec = JSON.parse(r.value);
-    if (rec.cleanup?.waiting && settings.cleanup && now() - rec.at < 60 * 86400) {   // seeding before removal
-      rec.cleanup = await cleanupIfDone(env, rec, settings);
+    // Seeding before removal; or a removal that failed (qBittorrent timed out, the library hadn't caught up yet):
+    // tried again every 10 minutes. cleanupIfDone re-verifies the copy before deleting anything.
+    const retry = rec.cleanup?.error && !rec.batch && rec.hash && now() - (rec.cleanup.at || rec.finished || 0) >= 600;
+    if ((rec.cleanup?.waiting || retry) && settings.cleanup && now() - rec.at < 60 * 86400) {
+      const c = await cleanupIfDone(env, rec, settings);
+      rec.cleanup = c.error ? { ...c, at: now(), tries: (rec.cleanup.tries || 0) + 1 } : c;
       await kvSet(env.DB, `push:${rec.job}`, rec); n++;
       continue;
     }
