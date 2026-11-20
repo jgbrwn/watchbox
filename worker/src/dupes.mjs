@@ -156,6 +156,7 @@ export async function annotateFind(env, path, data) {
   const targets = [];   // [object, imdb id]
   const add = (o, imdb) => { if (o && /^tt\d+$/.test(imdb || '')) targets.push([o, imdb]); };
   if (path.startsWith('/api/search') && Array.isArray(data?.results)) for (const r of data.results) add(r, r.imdb_code || r.omdb?.imdbID);
+  if (path.startsWith('/api/search') && data?.lookup) add(data.lookup, data.lookup.imdb_id);   // searched by IMDb/TMDB id
   else if (path.startsWith('/api/movie/')) add(data, data?.imdb_code);
   else if (path.startsWith('/api/omdb')) add(data, data?.imdbID);
   if (!targets.length) return data;

@@ -18,7 +18,8 @@ Movies: `Title (Year)/Title (Year).mkv`, or loose `Title.Year.1080p.mkv`; extra 
 versions of one movie ("Extended", "4K" …); `-sample`, trailers and extras are recognised and kept out of the library.
 TV: `Show (Year)/Season 1/Show S01E02.mkv` (also `1x02`, `Episode 2`, absolute numbering, multi-episode `S01E01-E02`).
 Subtitles next to the video with the same name (`Title (Year).en.srt`, `.forced.srt`). Wrong match: fix it on the
-admin page (Library → the unmatched list's TMDB form, or paste a TMDB link for any key).
+admin page (Library → the unmatched list's form, or the form for any key): paste a TMDB or IMDb link or id (`tt0049730`;
+IMDb ids are looked up on TMDB).
 
 ## The admin page (`/admin`)
 
@@ -41,6 +42,8 @@ be an upgrade (a better rip, a higher resolution):
 
 - **Find:** search results and title pages are marked *In library · 1080p* (shows: which seasons) or *Downloading now*,
   matched by IMDb id, and downloading one of them asks *Download anyway?* first.
+  Find also searches by id: paste an IMDb id or link (`tt0049730`) or a TMDB one (`tmdb:3114`, `tmdb:tv/1396`, a
+  themoviedb.org link). YTS is searched by the IMDb id, Torrents-CSV by the title, and the same notes appear.
 - **Auto-send:** a finished download that's a movie you already have, or a season pack whose episodes are all in the
   library, isn't sent automatically. Pipeline marks it *⚠ Duplicate* with **Send anyway** and **Remove from box**.
   Packs that add new episodes are sent as usual (with a note of how many you had).
@@ -74,7 +77,8 @@ browser, ask for movies, shows or YouTube videos (paste a link), see their reque
 and share links. Each person has their own progress and favorites; nobody sees anyone else's.
 
 Requests: you approve or decline on Pipeline. *Download* picks the best 1080p YTS torrent with seeders; shows are
-found by hand on Find. A person marked *auto-approve* gets movies and YouTube videos downloaded straight away
+found by hand on Find: a request's *Find* button opens it searching for exactly that title, and the card links to
+TMDB and IMDb. People can search Requests by IMDb or TMDB link or id too. A person marked *auto-approve* gets movies and YouTube videos downloaded straight away
 (playlists up to 25 videos). Everyone who asked is emailed when the title is in the library.
 
 ## YouTube

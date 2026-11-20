@@ -12,6 +12,7 @@ import { getJson, storage } from './pipeline.mjs';
 import { onTheBox } from './dupes.mjs';
 import { randomHex } from './passwords.mjs';
 import { ageOf, pickMovieCert, pickTvCert, allowedAge } from './ages.mjs';
+import { parseTitleId, findByImdb } from './library/ids.mjs';
 import { sendEmail, portalUrl } from './users.mjs';
 
 const OPEN = ['pending', 'approved', 'sent'];
@@ -98,8 +99,20 @@ export async function searchTitles(env, q, user) {
   }
   q = q.slice(0, 100);
   if (q.length < 2) return [];
-  const d = await new Tmdb(env.TMDB_TOKEN).get('/search/multi', { query: q, include_adult: 'false' });
-  const items = (d?.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 20);
+  const tmdb = new Tmdb(env.TMDB_TOKEN);
+  let items;
+  const id = parseTitleId(q);
+  if (id) {   // an IMDb id or link, or a TMDB id or link: exactly that title
+    const keys = id.imdb ? await findByImdb(tmdb, id.imdb) : id.kind ? [{ kind: id.kind, tmdb_id: id.tmdb }] : [{ kind: 'movie', tmdb_id: id.tmdb }, { kind: 'tv', tmdb_id: id.tmdb }];
+    items = [];
+    for (const k of keys.slice(0, 4)) {
+      const r = await tmdb.get(`/${k.kind}/${k.tmdb_id}`).catch(() => null);
+      if (r?.id && !r.adult) items.push({ ...r, media_type: k.kind });
+    }
+  } else {
+    const d = await tmdb.get('/search/multi', { query: q, include_adult: 'false' });
+    items = (d?.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 20);
+  }
   const out = [];
   for (const r of items) {
     const kind = r.media_type, date = r.release_date || r.first_air_date || '';
@@ -223,7 +236,7 @@ export async function createRequest(env, user, b) {
     return { status: 409, body: { error: 'You’ve already asked for that one.' } };
   const open = (await db.prepare(`SELECT count(*) n FROM requests WHERE user_id = ? AND status IN ('pending','approved','sent')`).bind(user.id).first()).n;
   if (open >= MAX_OPEN) return { status: 429, body: { error: `You have ${open} requests waiting. Once some are ready you can ask for more.` } };
-  const d = await new Tmdb(env.TMDB_TOKEN).get(`/${kind}/${tmdbId}`, { append_to_response: kind === 'movie' ? 'release_dates' : 'content_ratings' });
+  const d = await new Tmdb(env.TMDB_TOKEN).get(`/${kind}/${tmdbId}`, { append_to_response: kind === 'movie' ? 'release_dates' : 'content_ratings,external_ids' });
   if (!d) return { status: 404, body: { error: 'TMDB doesn’t know that title.' } };
   // Before the library check, so a limited user isn't told that a title hidden from them is there.
   const key = (kind === 'movie' ? 'movie:' : 'series:') + tmdbId, o = await db.prepare('SELECT age FROM age_overrides WHERE key = ?').bind(key).first();
@@ -257,7 +270,8 @@ export async function createRequest(env, user, b) {
     if (auto.error) await db.prepare('UPDATE requests SET reply = ? WHERE id = ?').bind('Not downloaded automatically: ' + auto.error + ' The owner will look at it.', row.id).run();
     else await setTitle(db, keyOf({ kind, tmdb_id: tmdbId }), { status: 'sent', torrent_hash: auto.hash, torrent_name: auto.name, reply: null });
   }
-  if (age == null) await db.prepare('UPDATE requests SET unrated = 1 WHERE id = ?').bind(row.id).run();
+  const imdb = d.imdb_id || d.external_ids?.imdb_id || null;
+  await db.prepare('UPDATE requests SET unrated = ?, imdb_id = ? WHERE id = ?').bind(age == null ? 1 : 0, /^tt\d+$/.test(imdb || '') ? imdb : null, row.id).run();
   if (!other && (!auto || auto.error)) await notifyOwner(env, user, { ...row, kind, note: b.note, auto_error: auto?.error, unrated: age == null });
   return { status: 200, body: { id: row.id, status: auto && !auto.error ? 'sent' : other?.status || 'pending', note: unrated ? UNRATED_NOTE : null } };
 }
@@ -403,10 +417,11 @@ export async function requestsForOwner(env) {
   for (const r of rows) {
     const k = r.kind + ':' + r.tmdb_id + ':' + r.yt_id;
     if (!by.has(k)) by.set(k, { kind: r.kind, tmdb_id: r.tmdb_id, yt_id: r.yt_id || null, title: r.title, year: r.year, poster: r.poster, status: r.status, label: describe(r, live),
-      reply: r.reply, torrent_name: r.torrent_name, created_at: r.created_at, people: [] });
+      reply: r.reply, torrent_name: r.torrent_name, imdb_id: r.imdb_id || null, created_at: r.created_at, people: [] });
     const g = by.get(k);
     g.people.push({ name: r.display_name || r.username, note: r.note });
     if (r.unrated) g.unrated = true;
+    if (r.imdb_id) g.imdb_id ||= r.imdb_id;
     if (r.status !== 'declined') (g.limited ||= []).push(r);
     if (OPEN.includes(r.status)) { g.status = r.status; g.label = describe(r, live); }
   }

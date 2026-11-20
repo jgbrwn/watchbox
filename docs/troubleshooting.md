@@ -6,7 +6,7 @@ unreadable or a folder id in `LIBRARY_ROOTS` isn't in the storage's `config.php`
 shared host: some hosts' firewalls block requests without a User-Agent (the Worker sends one; check with
 `curl -A x -u user:pass https://storage.example.com/list.php`).
 
-**A title is matched wrongly or not at all.** Library → Unmatched: paste the TMDB link for its key. Better file names
+**A title is matched wrongly or not at all.** Library → Unmatched: paste the TMDB or IMDb link (or id) for its key. Better file names
 help (see [naming](using.md#naming-files)).
 
 **Videos don't play in an app.** The app plays the original file. Check the codec on the admin page (Manage shows

@@ -182,7 +182,7 @@ function mainHtml(env, u) {
 
 <section class=pane id=requests>
 <h2>Ask for a movie, show or YouTube video</h2>
-<input type=search id=sq placeholder="Search for a title, or paste a YouTube link…" autocomplete=off><div id=smsg></div><div id=sres class=card style="display:none"></div>
+<input type=search id=sq placeholder="Search for a title, paste an IMDb/TMDB link or id (tt…), or a YouTube link…" autocomplete=off><div id=smsg></div><div id=sres class=card style="display:none"></div>
 <h2>Your requests</h2><div id=reqs class=card><p class=hint>Loading…</p></div>
 </section>
 

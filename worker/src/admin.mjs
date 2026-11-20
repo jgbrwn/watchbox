@@ -14,6 +14,8 @@ import { authorize as qcAuthorize } from './quickconnect.mjs';
 import { createShare, listShares, revokeShare, shareSettings, setShareSettings, OWNER_DAYS } from './shares.mjs';
 import { applyAges, ageOf, ageKey, AGE_KEY_SQL } from './ages.mjs';
 import { requestsForOwner, decide, refreshRequests } from './requests.mjs';
+import { parseTitleId, findByImdb } from './library/ids.mjs';
+import { Tmdb } from './library/tmdb.mjs';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -49,6 +51,21 @@ const TAB_ICONS = {
 const tabIcon = id => `<svg class=ti viewBox="0 0 24 24" aria-hidden="true">${TAB_ICONS[id] || TAB_ICONS.library}</svg>`;
 
 const ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" width="22" height="22"><rect x="2" y="4" width="20" height="16" rx="4" fill="var(--accent)"/><path d="M10 8.5v7l6-3.5z" fill="var(--accent-ink)"/></svg>`;
+
+/** The fix form's value for a match key: a TMDB id or link, or an IMDb id or link (looked up on TMDB, the movie or
+ *  show the key is for). Empty or "none" clears the fix. { id } or { error: 'fix-missing' | 'fix-kind' }. */
+export async function overrideId(env, key, raw) {
+  raw = String(raw || '').trim();
+  if (raw === '' || raw === 'none') return { id: null };
+  const p = parseTitleId(raw, { bare: true });
+  if (p?.imdb) {
+    const hits = await findByImdb(new Tmdb(env.TMDB_TOKEN), p.imdb).catch(() => []);
+    const hit = hits.find(h => h.kind === (key.startsWith('tv:') ? 'tv' : 'movie'));
+    return hit ? { id: hit.tmdb_id } : { error: hits.length ? 'fix-kind' : 'fix-missing' };
+  }
+  const id = p?.tmdb ?? (Number(raw.replace(/\D/g, '')) || null);
+  return id ? { id } : { error: 'fix-missing' };
+}
 
 export async function handleAdmin(request, env, ctx) {
   let who;
@@ -133,9 +150,10 @@ export async function handleAdmin(request, env, ctx) {
       const key = String(form.get('key') || '').trim();
       const raw = String(form.get('tmdb') || '').trim();
       if (/^(movie|tv):[a-z0-9]*:\d{0,4}$/.test(key)) {
+        const { id, error } = await overrideId(env, key, raw);
+        if (error) return Response.redirect(url.origin + '/admin?done=' + error + '#library', 303);
         const cur = JSON.parse((await env.DB.prepare("SELECT value FROM kv WHERE key='overrides'").first())?.value || '{}');
-        const m = /(\d+)\s*$/.exec(raw.replace(/\/$/, '').replace(/-.*$/, ''));   // accepts an id or a TMDB URL
-        cur[key] = raw === '' || raw === 'none' ? null : Number(m?.[1] || raw.replace(/\D/g, ''));
+        cur[key] = id;
         await env.DB.prepare("INSERT OR REPLACE INTO kv(key,value) VALUES ('overrides', ?)").bind(JSON.stringify(cur)).run();
         await requestSync(env);
       }
@@ -172,7 +190,7 @@ export async function handleAdmin(request, env, ctx) {
   <div class=fix-path title="${esc(u.path)}">${esc(u.path)}</div>${u.text ? `<div class=fix-note title="${esc(u.match_note)}">${esc(u.text)}</div>` : ''}</div>
   <form method=post action=/admin/override class=fix-form><input type=hidden name=key value="${esc(u.match_key)}">
   <a class=btn-ghost target=_blank rel=noopener href="https://www.themoviedb.org/search/${tv ? 'tv' : 'movie'}?query=${encodeURIComponent(u.title)}">Search TMDB ↗</a>
-  <input name=tmdb required inputmode=url placeholder="${u.episode ? 'Different show? TMDB link' : 'TMDB link or id'}" aria-label="TMDB link or id for ${esc(u.title)}"><button${u.episode ? ' class=quiet' : ''}>Fix</button></form></article>`;
+  <input name=tmdb required inputmode=url placeholder="${u.episode ? 'Different show? TMDB or IMDb link' : 'TMDB or IMDb link or id'}" aria-label="TMDB or IMDb link or id for ${esc(u.title)}"><button${u.episode ? ' class=quiet' : ''}>Fix</button></form></article>`;
   };
   const done = url.searchParams.get('done');
 
@@ -180,7 +198,10 @@ export async function handleAdmin(request, env, ctx) {
   const library = `
 <div class=wsearch><input type=search id=wq placeholder="Watch something: search movies and shows…" autocomplete=off aria-label="Search the library to watch"></div>
 <div id=wres class=wgrid></div>
-${done ? `<div class=toast role=status>${done === 'sync' ? 'Sync requested. It starts within a minute; new files appear about a minute after that.' : 'Saved. Re-matching within a minute; it shows up in your apps a minute or two later.'}</div>` : ''}
+${done ? `<div class=toast role=status>${done === 'sync' ? 'Sync requested. It starts within a minute; new files appear about a minute after that.'
+  : done === 'fix-missing' ? 'Not saved: TMDB doesn’t know that id. Paste a TMDB or IMDb link or id (tt…).'
+  : done === 'fix-kind' ? 'Not saved: that IMDb id is a show on TMDB, and this is a movie (or the other way round).'
+  : 'Saved. Re-matching within a minute; it shows up in your apps a minute or two later.'}</div>` : ''}
 <section class=stats>
   ${stat((count.Movie || 0).toLocaleString(), 'Movies')}
   ${stat((count.Series || 0).toLocaleString(), 'Shows')}
@@ -207,7 +228,7 @@ ${episodes.length ? `<details><summary>Episodes TMDB can’t place <span class=c
 
 <details><summary>Override any match</summary>
 <p class=hint>Keys look like <code>movie:title:year</code> or <code>tv:title:</code> (lowercase, letters and digits only). An empty id removes an override.</p>
-<form method=post action=/admin/override class=row><input name=key size=30 placeholder="movie:notorious:1946" required> <input name=tmdb size=18 placeholder="TMDB link or id"> <button>Save</button></form></details>
+<form method=post action=/admin/override class=row><input name=key size=30 placeholder="movie:notorious:1946" required> <input name=tmdb size=22 placeholder="TMDB or IMDb link or id"> <button>Save</button></form></details>
 
 <details${missing.length ? '' : ' disabled'}><summary>Missing from ${cfg().storageName} <span class=count>${missing.length}</span></summary>
 <p class=hint>Files that were in the library but aren't on the storage box any more. They're hidden from your apps; watch history is kept if they come back.</p>
@@ -488,6 +509,15 @@ function show(id) {
   if (id === 'users') setTimeout(() => { loadUsers(); loadShares(); loadAges(); });
   if (id === 'pipeline') setTimeout(() => { loadRequests(); loadYoutube(); });
 }
+// Opens the Find tab (c-cli) searching for q (an IMDb id, "tmdb:movie/123" or a title).
+function openFind(q, source) {
+  const f = $('#cc iframe'); if (!f) return;
+  f.src = f.dataset.src + '&next=' + encodeURIComponent('/?q=' + encodeURIComponent(q) + '&source=' + source) + '&theme=' + shownTheme();
+  history.replaceState(null, '', '#cc'); show('cc');
+}
+// TMDB and IMDb links for a request card.
+const idLinks = r => r.kind === 'youtube' ? '' : '<div class=muted style="font-size:13px;margin-top:2px"><a href="https://www.themoviedb.org/' + (r.kind === 'tv' ? 'tv' : 'movie') + '/' + r.tmdb_id + '" target=_blank rel="noopener noreferrer">TMDB ' + r.tmdb_id + ' ↗</a>' +
+  (r.imdb_id ? ' · <a href="https://www.imdb.com/title/' + esc(r.imdb_id) + '/" target=_blank rel="noopener noreferrer">IMDb ' + esc(r.imdb_id) + ' ↗</a>' : '') + '</div>';
 tabs.forEach(b => b.onclick = () => { history.replaceState(null, '', '#' + b.dataset.tab); show(b.dataset.tab); });
 addEventListener('hashchange', () => show(location.hash.slice(1)));
 show(location.hash.slice(1) || 'library');
@@ -838,15 +868,17 @@ async function loadRequests() {
       const who = r.people.map(p => esc(p.name) + (p.note ? ': “' + esc(p.note) + '”' : '')).join('<br>');
       const acts = r.status === 'pending' || r.status === 'approved'
         ? (r.kind === 'youtube' && String(r.yt_id).startsWith('list:') ? '<button data-rq=auto title="All videos into the YouTube library">Download all</button><button class=quiet data-rq=asshow>Add as a show…</button>' : '') +
+          (r.kind !== 'youtube' && $('#cc iframe') ? '<button class=quiet data-rq=find title="Search the Find tab for exactly this title">Find</button>' : '') +
           (r.kind === 'movie' || (r.kind === 'youtube' && !String(r.yt_id).startsWith('list:')) ? '<button data-rq=auto>Download</button>' : '') + (r.status === 'pending' ? '<button class=quiet data-rq=manual>Approve</button>' : '') + '<button class=quiet data-rq=decline>Decline</button>' : '';
-      return '<div class="card rq" data-kind="' + r.kind + '" data-tmdb="' + r.tmdb_id + '" data-yt="' + esc(r.yt_id || '') + '">' + (r.poster ? '<img alt=""' + (r.kind === 'youtube' ? ' class=yt referrerpolicy=no-referrer' : '') + ' src="' + esc(r.poster) + '">' : '<span></span>') +
-        '<div><div class=name>' + (r.yt_id ? '<a href="https://www.youtube.com/' + (String(r.yt_id).startsWith('list:') ? 'playlist?list=' + esc(r.yt_id.slice(5)) : 'watch?v=' + esc(r.yt_id)) + '" target=_blank rel="noopener noreferrer">' + esc(r.title) + '</a>' : esc(r.title)) + ' <span class=muted>' + (r.year ? r.year + ' · ' : '') + (r.kind === 'tv' ? 'show' : r.kind === 'youtube' ? 'YouTube' : 'movie') + '</span></div><div class=meta><span class="status ' + (r.status === 'available' ? 'completed' : r.status === 'declined' ? 'failed' : 'running') + '">' + esc(r.label) + '</span>' + (r.torrent_name ? '<span>' + esc(r.torrent_name) + '</span>' : '') + '</div><div style="font-size:13px">' + who + '</div>' + (r.age_hint ? '<div class="note agehint">' + esc(r.age_hint) + '</div>' : '') + (r.reply ? '<div class=muted style="font-size:13px;margin-top:4px">' + esc(r.reply) + '</div>' : '') + '<div class=rout></div></div><div class=acts>' + acts + '</div></div>';
+      return '<div class="card rq" data-kind="' + r.kind + '" data-tmdb="' + r.tmdb_id + '" data-imdb="' + esc(r.imdb_id || '') + '" data-yt="' + esc(r.yt_id || '') + '">' + (r.poster ? '<img alt=""' + (r.kind === 'youtube' ? ' class=yt referrerpolicy=no-referrer' : '') + ' src="' + esc(r.poster) + '">' : '<span></span>') +
+        '<div><div class=name>' + (r.yt_id ? '<a href="https://www.youtube.com/' + (String(r.yt_id).startsWith('list:') ? 'playlist?list=' + esc(r.yt_id.slice(5)) : 'watch?v=' + esc(r.yt_id)) + '" target=_blank rel="noopener noreferrer">' + esc(r.title) + '</a>' : esc(r.title)) + ' <span class=muted>' + (r.year ? r.year + ' · ' : '') + (r.kind === 'tv' ? 'show' : r.kind === 'youtube' ? 'YouTube' : 'movie') + '</span></div><div class=meta><span class="status ' + (r.status === 'available' ? 'completed' : r.status === 'declined' ? 'failed' : 'running') + '">' + esc(r.label) + '</span>' + (r.torrent_name ? '<span>' + esc(r.torrent_name) + '</span>' : '') + '</div><div style="font-size:13px">' + who + '</div>' + idLinks(r) + (r.age_hint ? '<div class="note agehint">' + esc(r.age_hint) + '</div>' : '') + (r.reply ? '<div class=muted style="font-size:13px;margin-top:4px">' + esc(r.reply) + '</div>' : '') + '<div class=rout></div></div><div class=acts>' + acts + '</div></div>';
     }).join('');
   } catch (e) { $('#reqs').innerHTML = '<div class=note>' + esc(e.message) + '</div>'; $('#requests-wrap').hidden = false; }
 }
 $('#reqs').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-rq]'); if (!b) return;
   const card = b.closest('.rq'), action = b.dataset.rq;
+  if (action === 'find') { openFind(card.dataset.imdb || 'tmdb:' + card.dataset.kind + '/' + card.dataset.tmdb, card.dataset.kind === 'movie' ? 'yts' : 'torrents-csv'); return; }
   if (action === 'asshow') { $('#yturl').value = 'https://www.youtube.com/playlist?list=' + card.dataset.yt.slice(5); document.getElementById('youtube').scrollIntoView({ behavior: 'smooth' }); previewList($('#yturl').value); return; }
   let reply = null;
   if (action === 'decline') { reply = prompt('Decline. A short reason for them? (optional)'); if (reply === null) return; }
