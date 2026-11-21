@@ -66,7 +66,6 @@ export async function batchTick(env) {
   if (info.error === 'not configured') return { idle: true };   // no download box
   if (!Array.isArray(info.data)) return { error: info.error };
   const byHash = new Map(info.data.map(t => [t.hash, t]));
-  const out = [];
 
   // Forget torrents removed by hand; keep finished records a day for the Pipeline tab.
   for (const [h, b] of recs) {
@@ -77,7 +76,16 @@ export async function batchTick(env) {
   const QUEUED = ['waiting', 'too_big', 'next'];
   const waiting = [...recs.values()].filter(b => QUEUED.includes(b.step));
   const ready = [...recs.values()].filter(b => b.step === 'downloading' && readyName(byHash.get(b.hash)));
-  if (!fresh.length && !waiting.length && !ready.length) return { idle: true };
+  const out = [];
+  // A part started right after a recheck: qBittorrent ignores that start while checking and leaves the torrent stopped.
+  for (const b of recs.values()) {
+    if (b.step !== 'downloading' || !b.start_pending) continue;
+    const st = byHash.get(b.hash)?.state || '';
+    if (/checking|meta|moving/i.test(st)) continue;                   // still checking: next minute
+    if (/stopped|paused/i.test(st)) { await qbStart(env, b.hash); out.push({ name: b.name, started: true }); continue; }   // cleared once it's running
+    delete b.start_pending; await kvSet(db, 'batch:' + b.hash, b);
+  }
+  if (!fresh.length && !waiting.length && !ready.length) return out.length ? { out } : { idle: true };
 
   // A batch finished downloading: stop the torrent and send its files.
   for (const b of ready) {
@@ -154,6 +162,7 @@ async function startBatch(env, rec, files, budget, { free, reclaim = 0, held = n
   if (rec.batches > 0 || rec.step === 'waiting' || rec.step === 'too_big' || rec.step === 'next') {
     // The removed files' pieces are still marked as had; a recheck clears that before peers ask for them.
     await qbPost(env, '/api/v2/torrents/recheck', 'hashes=' + rec.hash);
+    rec.start_pending = now();   // qBittorrent drops a start sent while it's checking: batchTick starts it once the check is done
   }
   await qbStart(env, rec.hash);
   rec.batches++;

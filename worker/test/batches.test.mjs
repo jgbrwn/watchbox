@@ -39,6 +39,7 @@ function fakeBox({ free, files, torrents }) {
     Object.assign(e.t, { progress: 1, state: 'stalledUP', content_path: '/home/freebsd/media/' + e.t.name });
   };
   box.state = hash => box.ts.get(hash).t.state;
+  box.checkDone = (hash = H) => { const t = box.ts.get(hash).t; if (/^checking/.test(t.state)) t.state = 'stoppedDL'; };
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url), body = new URLSearchParams(typeof init.body === 'string' ? init.body : '');
     const j = v => new Response(JSON.stringify(v), { headers: { 'Content-Type': 'application/json' } });
@@ -52,8 +53,9 @@ function fakeBox({ free, files, torrents }) {
       return new Response('');
     }
     if (u.pathname === '/api/v2/torrents/stop') { e.t.state = e.t.progress < 1 ? 'stoppedDL' : 'stoppedUP'; return new Response(''); }
-    if (u.pathname === '/api/v2/torrents/start') { e.t.state = 'downloading'; return new Response(''); }
-    if (u.pathname === '/api/v2/torrents/recheck') return new Response('');
+    // Like qBittorrent: a start sent while it's checking is ignored, and a stopped torrent is stopped again after the check.
+    if (u.pathname === '/api/v2/torrents/start') { if (!/^checking/.test(e.t.state)) e.t.state = 'downloading'; return new Response(''); }
+    if (u.pathname === '/api/v2/torrents/recheck') { e.t.state = 'checkingDL'; return new Response(''); }
     if (u.pathname === '/api/v2/torrents/delete') {
       for (const h of body.get('hashes').split('|')) { const e = box.ts.get(h); if (e) box.free += completed(e); box.ts.delete(h); }
       return new Response('');
@@ -109,7 +111,11 @@ test('a pack with one file bigger than the free space: the rest is sent, that on
   rec = await kvGet(d, 'batch:' + H);
   assert.equal(rec.step, 'downloading');
   assert.deepEqual(rec.current, [1]);
-  assert.equal(box.torrent.state, 'downloading');
+  assert.equal(box.torrent.state, 'checkingDL');                   // the start sent with the recheck was ignored
+  await batchTick(env);                                            // still checking: left alone
+  assert.equal(box.torrent.state, 'checkingDL');
+  box.checkDone(); await batchTick(env);
+  assert.equal(box.torrent.state, 'downloading', 'started once the check is done');
 });
 
 test('a 90 GB pack on a box with 50 GB free: three parts, each sent and removed, then the torrent is removed', async () => {
@@ -147,6 +153,11 @@ test('a 90 GB pack on a box with 50 GB free: three parts, each sent and removed,
       assert.equal(box.files[part].priority, 1);
       assert.equal(box.files[part - 1].priority, 0);
       assert.equal(box.calls.filter(c => c === '/api/v2/torrents/recheck').length, part);
+      assert.equal(box.torrent.state, 'checkingDL');
+      box.checkDone(); await batchTick(env);
+      assert.equal(box.torrent.state, 'downloading', 'the next part starts after the recheck');
+      await batchTick(env);
+      assert.equal((await kvGet(d, 'batch:' + H)).start_pending, undefined);
     } else {
       assert.equal(r.done, true);
       assert.equal(rec.step, 'done');
