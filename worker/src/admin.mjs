@@ -210,7 +210,7 @@ ${done ? `<div class=toast role=status>${done === 'sync' ? 'Sync requested. It s
   <a class="stat${titles.length ? ' warn' : ''}" href="#fix"><b>${titles.length}</b><span>Need a match</span></a>
 </section>
 
-<h2>Storage</h2>
+<h2 id=storage>Storage</h2>
 <div class=disks>${meter(cfg().storageName, space.store, space.store?.estimated ? 'estimated from library size' : 'from the hosting panel')}${meter('Download box', space.box, 'downloads wait here until sent')}</div>
 
 <h2>Recently added</h2>
@@ -448,7 +448,7 @@ nav{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);
     <a class=ext id=ext target=_blank rel="noopener noreferrer" hidden title="Open in a new tab" aria-label="Open in a new tab">Open in new tab ↗</a>
   </div>
 </header>
-${lowDisk.length ? `<div class=alert role=alert>Disk space is running low on ${lowDisk.join(' and ')}. <a href="#library">See storage</a></div>` : ''}
+${lowDisk.length ? `<div class=alert role=alert>Disk space is running low on ${lowDisk.join(' and ')}. <a href="#storage">See storage</a></div>` : ''}
 <main>
 <section class="pane doc" id=library role=tabpanel><div class=wrap>${library}</div></section>
 <section class="pane doc" id=manage role=tabpanel><div class=wrap>${manage}</div></section>
@@ -520,6 +520,14 @@ const idLinks = r => r.kind === 'youtube' ? '' : '<div class=muted style="font-s
   (r.imdb_id ? ' · <a href="https://www.imdb.com/title/' + esc(r.imdb_id) + '/" target=_blank rel="noopener noreferrer">IMDb ' + esc(r.imdb_id) + ' ↗</a>' : '') + '</div>';
 tabs.forEach(b => b.onclick = () => { history.replaceState(null, '', '#' + b.dataset.tab); show(b.dataset.tab); });
 addEventListener('hashchange', () => show(location.hash.slice(1)));
+// In-page links (#storage, #fix, #ready …): handled here too, since following a link to the hash already in the
+// address bar fires no hashchange (tab buttons set it), and a section in the current tab still needs scrolling to.
+document.addEventListener('click', e => {
+  const a = e.target.closest && e.target.closest('a[href^="#"]');
+  const id = a && a.getAttribute('href').slice(1);
+  if (!id || !document.getElementById(id) || e.button || e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault(); history.replaceState(null, '', '#' + id); show(id);
+});
 show(location.hash.slice(1) || 'library');
 if (location.search) history.replaceState(null, '', location.pathname + location.hash);
 
