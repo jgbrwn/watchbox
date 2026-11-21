@@ -165,7 +165,7 @@ export async function queryItems(env, s, p, extra = {}) {
   const from = `FROM items i LEFT JOIN progress p ON p.user_id = ? AND p.item_id = i.id LEFT JOIN favorites f ON f.user_id = ? AND f.item_id = i.id`;
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const sortBy = extra.sort || p.list('SortBy');
-  const desc = (p.list('SortOrder')[0] || 'Ascending').toLowerCase().startsWith('desc');
+  const desc = extra.desc ?? (p.list('SortOrder')[0] || 'Ascending').toLowerCase().startsWith('desc');   // extra.desc: the endpoint fixes the direction (Latest, Resume)
   const order = [];
   for (const k of sortBy) { const c = SORT[k.toLowerCase()]; if (c) order.push(c.split(', ').map(x => `${x} ${desc ? 'DESC' : 'ASC'} NULLS LAST`).join(', ')); }
   if (!order.length) order.push(types.length === 1 && types[0] === 'Episode' || (parentId && !recursive && types[0] !== 'Movie') ? 'i.parent_index, i.index_number, i.sort_name' : 'i.sort_name');
@@ -427,7 +427,7 @@ export async function handleJellyfin(request, env, ctxBase) {
 
   // ---- Resume / Latest / NextUp ----
   if (lower === '/useritems/resume' || (r0 === 'items' && r1 === 'resume')) {
-    const { rows, total, start } = await queryItems(env, s, p, { where: 'p.position_ticks > 0 AND IFNULL(p.played,0) = 0', recursive: true, sort: ['DatePlayed'], types: p.list('IncludeItemTypes').length ? p.list('IncludeItemTypes') : ['Movie', 'Episode'] });
+    const { rows, total, start } = await queryItems(env, s, p, { where: 'p.position_ticks > 0 AND IFNULL(p.played,0) = 0', recursive: true, sort: ['DatePlayed'], desc: true, types: p.list('IncludeItemTypes').length ? p.list('IncludeItemTypes') : ['Movie', 'Episode'] });
     rows.sort((a, b) => (b.last_played || 0) - (a.last_played || 0));
     return json({ Items: await serialize(env, s, rows, ctx), TotalRecordCount: total, StartIndex: start });
   }
@@ -439,7 +439,7 @@ export async function handleJellyfin(request, env, ctxBase) {
     if (!types.length) types = lib === 'tv' ? ['Episode'] : lib ? ['Movie'] : ['Movie', 'Episode'];
     const hidePlayed = p.bool('IsPlayed') === false || p.bool('IsPlayed') == null;
     const grouped = p.bool('GroupItems') !== false;
-    const { rows } = await queryItems(env, s, p, { recursive: true, types, sort: ['DateCreated'], limit: grouped ? 400 : limit, where: hidePlayed ? 'IFNULL(p.played,0) = 0' : undefined });
+    const { rows } = await queryItems(env, s, p, { recursive: true, types, sort: ['DateCreated'], desc: true, limit: grouped ? 400 : limit, where: hidePlayed ? 'IFNULL(p.played,0) = 0' : undefined });
     rows.sort((a, b) => b.date_created - a.date_created);
     if (!grouped) return json(await serialize(env, s, rows.slice(0, limit), ctx));
     // Group episodes by series (as Jellyfin does): one Series card per show.
