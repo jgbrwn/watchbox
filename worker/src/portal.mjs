@@ -6,7 +6,7 @@ import { verifyAccessJwt } from './access.mjs';
 import { userStatus, listDevices, signOut, setPassword, passphrase, serverUrl, INVITE_DAYS } from './users.mjs';
 import { searchTitles, createRequest, requestsFor, refreshRequests, dismissNotice, MAX_OPEN } from './requests.mjs';
 import { MIN_PASSWORD_LENGTH } from './passwords.mjs';
-import { handlePlayer, watchHtml, libraryItems, WATCH_CSS, WATCH_JS } from './player.mjs';
+import { handlePlayer, watchHtml, libraryItems, libraryVersion, WATCH_CSS, WATCH_JS } from './player.mjs';
 import { authorize as qcAuthorize } from './quickconnect.mjs';
 import { canShare, createShare, listShares, revokeShare, GUEST_DAYS } from './shares.mjs';
 
@@ -77,6 +77,7 @@ async function api(request, env, ctx, path, url, user) {
   }
   if (path === '/me/api/signout' && request.method === 'POST') { await signOut(db, { sessionId: String(body.id || ''), userId: user.id }); return json({ ok: true }); }
   if (path === '/me/api/notify' && request.method === 'POST') { await db.prepare('UPDATE users SET notify = ? WHERE id = ?').bind(body.on ? 1 : 0, user.id).run(); return json({ ok: true }); }
+  if (path === '/me/api/library-version') return json({ v: (await libraryVersion(db)).v });
   if (path === '/me/api/library') return json(await libraryItems(db, url.searchParams.get('q'), url.searchParams.get('type'), user));
   if (path === '/me/api/shares' && request.method === 'GET') return json({ shares: await listShares(env, user.id), can_share: await canShare(env, user) });
   if (path === '/me/api/shares' && request.method === 'POST') { const x = await createShare(env, url.origin, user, body); return json(x.body, x.status); }
@@ -212,6 +213,20 @@ tabs.forEach(b => b.onclick = () => { history.replaceState(null, '', '#' + b.dat
 addEventListener('hashchange', () => show(location.hash.slice(1)));
 
 let lt; $('#lq').oninput = () => { clearTimeout(lt); lt = setTimeout(lib, 250); }; $('#ltype').onchange = lib;
+// New titles appear without a reload: a version check every 30 s (and on coming back to the page or app) re-reads the
+// library grid (unless a search is typed) and the requests (their status changes when a title arrives).
+let libV = null;
+async function libCheck() {
+  if (document.hidden) return;
+  try {
+    const { v } = await api('library-version');
+    if (libV === null || v === libV) { libV = v; return; }
+    libV = v;
+    if ($('#lgrid').children.length && !$('#lq').value.trim()) lib();
+    if ($('#requests').classList.contains('on') || $('#account').classList.contains('on')) state();
+  } catch {}
+}
+libCheck(); setInterval(libCheck, 30000); document.addEventListener('visibilitychange', libCheck);
 async function lib() {
   const d = await api('library?type=' + $('#ltype').value + '&q=' + encodeURIComponent($('#lq').value.trim()));
   $('#lcount').textContent = (d.counts.Movie || 0) + ' movies · ' + (d.counts.Series || 0) + ' shows' + (d.counts.YouTube ? ' · ' + d.counts.YouTube + ' YouTube videos' : '') + ($('#lq').value.trim() ? '' : ' · newest first');

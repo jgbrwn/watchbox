@@ -106,6 +106,17 @@ export async function libraryItems(db, q, type, viewer = null) {
   return { items, counts: Object.fromEntries(counts.map(c => [c.type, c.n])) };
 }
 
+/** A fingerprint of the library that changes when titles arrive, leave, get artwork or get matched, so open /admin and
+ *  /me pages can refresh without a reload. Same for everyone (it reveals nothing but "something changed"). */
+export async function libraryVersion(db) {
+  const r = await db.prepare(`SELECT count(*) n, max(date_created) d, total(length(images)) img,
+      (SELECT count(*) FROM files WHERE match_status = 'unmatched' AND missing_since IS NULL) um,
+      (SELECT count(*) FROM files WHERE missing_since IS NOT NULL AND deleted_at IS NULL) gone,
+      (SELECT max(id) FROM sync_log) log FROM items`).first();
+  const last = JSON.parse((await db.prepare("SELECT value FROM kv WHERE key='last_sync'").first())?.value || '{}');
+  return { v: [r.n, r.d, r.img, r.um, r.gone, r.log].join('.'), last_sync: last.at || null };
+}
+
 // ---------- routes under /me and /admin ----------
 
 // viewer: the Jellyfin user row whose age limit applies (null for the owner); allow(itemOrFileId): extra restriction

@@ -8,7 +8,7 @@ import { tools, launchUrl } from './tools.mjs';
 import { handlePipeline, storage } from './pipeline.mjs';
 import { handleManage } from './manage.mjs';
 import { handleUsers, sendEmail } from './users.mjs';
-import { handlePlayer, watchHtml, WATCH_CSS, WATCH_JS } from './player.mjs';
+import { handlePlayer, watchHtml, libraryVersion, WATCH_CSS, WATCH_JS } from './player.mjs';
 import { page as shell } from './portal.mjs';
 import { authorize as qcAuthorize } from './quickconnect.mjs';
 import { createShare, listShares, revokeShare, shareSettings, setShareSettings, OWNER_DAYS } from './shares.mjs';
@@ -95,6 +95,7 @@ export async function handleAdmin(request, env, ctx) {
     const r = await env.DB.prepare('UPDATE users SET email = ? WHERE id = ? AND email IS NULL').bind(who.email, String(b.user || '')).run();
     return Response.json(r.meta.changes ? { ok: true } : { error: 'That user already has an email.' }, { status: r.meta.changes ? 200 : 409 });
   }
+  if (path === '/admin/api/library-version') return Response.json(await libraryVersion(env.DB));
   if (path === '/admin/api/shares' && request.method === 'GET') return Response.json({ shares: await listShares(env), settings: await shareSettings(env.DB) });
   if (path === '/admin/api/shares' && request.method === 'POST') { const x = await createShare(env, url.origin, null, await request.json().catch(() => ({}))); return Response.json(x.body, { status: x.status }); }
   if (path === '/admin/api/shares/revoke' && request.method === 'POST') return Response.json(await revokeShare(env, (await request.json().catch(() => ({}))).id));
@@ -174,7 +175,7 @@ export async function handleAdmin(request, env, ctx) {
   const day = s => s ? new Date(s * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '';
   const stamp = s => s ? new Date(s * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '';
   const toolTabs = tools(env);
-  const space = await storage(env).catch(() => ({}));
+  const [space, libv] = await Promise.all([storage(env).catch(() => ({})), libraryVersion(env.DB)]);
   const gb = n => n >= 2 ** 40 ? (n / 2 ** 40).toFixed(2) + ' TB' : Math.round(n / 2 ** 30) + ' GB';   // binary units, like hosting panels and df
   const meter = (label, d, note) => d ? `<div class="disk ${d.level}"><div class=disk-top><b>${label}</b><span>${gb(d.total - d.used)} free of ${gb(d.total)}</span></div>
   <i class=meter2><i style="width:${Math.min(100, d.used / d.total * 100).toFixed(1)}%"></i></i><small>${Math.round(d.used / d.total * 100)}% used${note ? ' · ' + note : ''}</small></div>`
@@ -202,6 +203,7 @@ ${done ? `<div class=toast role=status>${done === 'sync' ? 'Sync requested. It s
   : done === 'fix-missing' ? 'Not saved: TMDB doesn’t know that id. Paste a TMDB or IMDb link or id (tt…).'
   : done === 'fix-kind' ? 'Not saved: that IMDb id is a show on TMDB, and this is a movie (or the other way round).'
   : 'Saved. Re-matching within a minute; it shows up in your apps a minute or two later.'}</div>` : ''}
+<div id=libbody data-v="${esc(libv.v)}">
 <section class=stats>
   ${stat((count.Movie || 0).toLocaleString(), 'Movies')}
   ${stat((count.Series || 0).toLocaleString(), 'Shows')}
@@ -238,6 +240,7 @@ ${episodes.length ? `<details><summary>Episodes TMDB can’t place <span class=c
 <p class=hint>Last run ${stamp(last.at)}${last.ms ? ` · ${(last.ms / 1000).toFixed(1)} s` : ''}. Only runs that changed something are listed.</p>
 <ul class=plain>${logs.map(l => { let d = l.detail; try { const j = JSON.parse(l.detail); d = [j.scan?.added && `${j.scan.added} added`, j.scan?.missing && `${j.scan.missing} missing`, j.scan?.restored && `${j.scan.restored} restored`, j.match && (j.match.movies + j.match.episodes) && `${j.match.movies + j.match.episodes} matched`, j.match?.unmatched && `${j.match.unmatched} unmatched`, j.probe?.ok && `${j.probe.ok} probed`, j.items?.written && `${j.items.written} items updated`, j.error].filter(Boolean).join(' · ') || 'no changes'; } catch {}
   return `<li><span class=muted>${stamp(l.at)}</span> ${l.step === 'sync-error' ? '<b class=bad>error</b> ' : ''}${esc(d)}</li>`; }).join('')}</ul></details>
+</div>
 
 <p class=foot>Metadata and images from <a href="https://www.themoviedb.org">TMDB</a>. This product uses the TMDB API but is not endorsed or certified by TMDB.</p>`;
 
@@ -448,7 +451,7 @@ nav{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);
     <a class=ext id=ext target=_blank rel="noopener noreferrer" hidden title="Open in a new tab" aria-label="Open in a new tab">Open in new tab ↗</a>
   </div>
 </header>
-${lowDisk.length ? `<div class=alert role=alert>Disk space is running low on ${lowDisk.join(' and ')}. <a href="#storage">See storage</a></div>` : ''}
+<div id=alerts>${lowDisk.length ? `<div class=alert role=alert>Disk space is running low on ${lowDisk.join(' and ')}. <a href="#storage">See storage</a></div>` : ''}</div>
 <main>
 <section class="pane doc" id=library role=tabpanel><div class=wrap>${library}</div></section>
 <section class="pane doc" id=manage role=tabpanel><div class=wrap>${manage}</div></section>
@@ -980,6 +983,30 @@ $('#testmail').addEventListener('click', async () => {
   catch (e) { $('#tmmsg').innerHTML = '<span class=bad>' + esc(e.message) + '</span>'; }
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+
+// New titles appear without a reload: a cheap version check every 30 s (and on coming back to the page or PWA); when
+// the library changed, the Library tab's sections (and the disk banner) are swapped for fresh ones. Not while a fix
+// form is being filled in: that waits for the next check.
+async function libCheck() {
+  if (document.hidden) return;
+  try {
+    const d = await api('library-version');
+    showSynced(d.last_sync);
+    const body = $('#libbody');
+    if (!body || d.v === body.dataset.v) return;
+    if ([...body.querySelectorAll('input:not([type=hidden]),select,textarea')].some(i => i === document.activeElement || (i.tagName !== 'SELECT' && i.type !== 'submit' && i.value))) return;
+    const r = await fetch('/admin', { cache: 'no-store' });
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html'), nb = doc.getElementById('libbody');
+    if (!r.ok || !nb) return;                                        // signed out: leave the page as it is
+    const open = [...body.querySelectorAll('details')].map(x => x.open), rail = body.querySelector('.rail')?.scrollLeft || 0;
+    body.replaceWith(nb);
+    nb.querySelectorAll('details').forEach((x, i) => { if (open[i] != null && !x.hasAttribute('disabled')) x.open = open[i]; });
+    const nr = nb.querySelector('.rail'); if (nr) nr.scrollLeft = rail;
+    const na = doc.getElementById('alerts'); if (na) $('#alerts').innerHTML = na.innerHTML;
+  } catch {}
+}
+setInterval(libCheck, 30000);
+document.addEventListener('visibilitychange', libCheck);
 </script>`;
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" } });
 }

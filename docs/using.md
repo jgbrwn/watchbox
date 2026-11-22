@@ -31,6 +31,9 @@ IMDb ids are looked up on TMDB).
 | Pipeline | requests from guests, YouTube (videos and playlists), finished downloads with **Send to library**, downloads in progress, copy history, auto-send and cleanup settings |
 | Find · Downloads · Transfer | the download box's c-cli, qBittorrent (VueTorrent) and rsync-web, if you have one |
 
+New titles show up on the Library tab (and on `/me`) by themselves, within about 30 seconds of a sync that adds them,
+without reloading the page.
+
 The theme button in the header cycles automatic (follows the system), dark and light, and is remembered per browser.
 Find, Downloads and Transfer follow it: open tabs switch along (Downloads reloads to do so), and so do tools opened
 with *Open in new tab*.

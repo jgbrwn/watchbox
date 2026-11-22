@@ -7,7 +7,7 @@ import { handleJellyfin } from '../src/jellyfin.mjs';
 import { sha256Hex } from '../src/auth.mjs';
 import { createShare, handleShare, revokeShare } from '../src/shares.mjs';
 import { streamVideo } from '../src/media.mjs';
-import { handlePlayer, watchData, watchHtml } from '../src/player.mjs';
+import { handlePlayer, watchData, watchHtml, libraryVersion } from '../src/player.mjs';
 
 const MIG = new URL('../migrations/', import.meta.url).pathname;
 const H = c => c.repeat(32);
@@ -116,4 +116,15 @@ test('favorites from the web player show up in apps; age limits and share links 
   assert.equal((await fav(null, PG, true)).status, 403, 'not signed in as a library user (unlinked owner, share links)');
   assert.equal((await fav(adult, PG, true, { allow: async () => false })).status, 404);
   assert.doesNotMatch(watchHtml(await watchData(env, R, null, null), { base: '/s/x', back: null, linked: false, share: {} }).body, /favbtn/, 'no button on share links');
+});
+
+test('libraryVersion changes when a title arrives or gets artwork (open pages refresh on it)', async () => {
+  const d = await setup();
+  const v1 = (await libraryVersion(d)).v;
+  assert.equal((await libraryVersion(d)).v, v1, 'stable while nothing changes');
+  d.raw.prepare("INSERT INTO items(id,type,library,name,sort_name,date_created,hash) VALUES (?, 'Movie', 'movies', 'New One', 'new one', 5, 'h')").run('9'.repeat(32));
+  const v2 = (await libraryVersion(d)).v;
+  assert.notEqual(v2, v1);
+  d.raw.prepare("UPDATE items SET images = '{\"Primary\":\"/p.jpg\"}' WHERE id = ?").run('9'.repeat(32));
+  assert.notEqual((await libraryVersion(d)).v, v2);
 });
