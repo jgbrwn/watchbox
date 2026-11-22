@@ -67,9 +67,10 @@ export async function watchData(env, id, userId, viewer = null) {
   const db = env.DB, item = await itemFor(env, id);
   if (!item || !allowedAge(viewer, item.age)) return null;
   const prog = userId ? await db.prepare('SELECT position_ticks, played FROM progress WHERE user_id = ? AND item_id = ?').bind(userId, id).first() : null;
+  const fav = userId ? !!(await db.prepare('SELECT 1 FROM favorites WHERE user_id = ? AND item_id = ?').bind(userId, id).first()) : false;
   const base = { id: item.id, type: item.type, name: item.name, year: item.year, overview: item.overview, series: item.series_name, season: item.parent_index,
     episode: item.index_number, images: parse(item.images) || {}, runtime: item.runtime_ticks ? item.runtime_ticks / TICKS : null,
-    resume: prog && !prog.played ? prog.position_ticks / TICKS : 0, played: !!prog?.played, series_id: item.series_id };
+    resume: prog && !prog.played ? prog.position_ticks / TICKS : 0, played: !!prog?.played, favorite: fav, series_id: item.series_id };
   if (item.type === 'Series') {
     const eps = (await db.prepare(`SELECT i.id, i.name, i.parent_index AS season, i.index_number AS episode, i.runtime_ticks, i.overview, p.position_ticks, p.played
       FROM items i LEFT JOIN progress p ON p.user_id = ? AND p.item_id = i.id WHERE i.series_id = ? AND i.type = 'Episode'
@@ -159,6 +160,18 @@ export async function handlePlayer(request, env, ctx, { base, userId, page, view
     for (const k of ['content-length', 'content-range', 'accept-ranges']) if (r.headers.get(k)) h.set(k, r.headers.get(k));
     return new Response(r.body, { status: r.status, headers: h });
   }
+  // Favorites: the same table the Jellyfin API reads, so apps signed in as this user show them too.
+  if (path === base + '/play/favorite' && request.method === 'POST') {
+    if (!userId) return json({ error: 'Not signed in as a library user' }, 403);
+    const b = await request.json().catch(() => ({}));
+    const id = String(b.item || '');
+    if (!/^[0-9a-f]{32}$/.test(id) || (allow && !(await allow(id)))) return json({ error: 'Not found' }, 404);
+    const item = await itemFor(env, id);
+    if (!item || !['Movie', 'Series', 'Episode'].includes(item.type) || !allowedAge(viewer, item.age)) return json({ error: 'Not found' }, 404);
+    if (b.on) await env.DB.prepare('INSERT OR IGNORE INTO favorites(user_id, item_id, created_at) VALUES (?,?,?)').bind(userId, id, Math.floor(Date.now() / 1000)).run();
+    else await env.DB.prepare('DELETE FROM favorites WHERE user_id = ? AND item_id = ?').bind(userId, id).run();
+    return json({ favorite: !!b.on });
+  }
   if (path.endsWith('/play/progress') && request.method === 'POST') {
     if (!userId) return json({ saved: false });
     const b = await request.json().catch(() => ({}));
@@ -176,24 +189,27 @@ const fmt = s => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s /
 export function watchHtml(d, { base, back, linked, share = null, canShare = false, shareDays = [], linkUsers = null }) {
   const img = (t, w) => d.images[t] ? `/Items/${d.id}/Images/${t}?maxWidth=${w}` : '';
   const title = d.type === 'Episode' ? `${d.series} · S${d.season}E${d.episode}` : d.name;
+  // ☆ Favorite: only for a library user (guests; the owner once linked), never on share links.
+  const favBtn = linked && !share ? `<button type=button class="quiet fav" id=favbtn data-item="${d.id}" data-base="${esc(base)}" aria-pressed="${d.favorite}">${d.favorite ? '★ Favorite' : '☆ Favorite'}${d.type === 'Episode' ? ' episode' : ''}</button>` : '';
   if (d.type === 'Series') {
     const seasons = [...new Set(d.episodes.map(e => e.season))];
     return { title: d.name, body: `<a class=back href="${esc(back)}">← Library</a>
-<div class=hero style="${d.images.Backdrop ? `background-image:linear-gradient(to top,var(--bg),rgb(0 0 0 / .35)),url('/Items/${d.id}/Images/Backdrop?maxWidth=1280')` : ''}"><h1>${esc(d.name)}</h1><p class=muted>${d.year || ''} · ${d.episodes.length} episodes</p></div>
+<div class=hero style="${d.images.Backdrop ? `background-image:linear-gradient(to top,var(--bg),rgb(0 0 0 / .35)),url('/Items/${d.id}/Images/Backdrop?maxWidth=1280')` : ''}"><h1>${esc(d.name)}</h1><p class=muted>${d.year || ''} · ${d.episodes.length} episode${d.episodes.length === 1 ? '' : 's'}</p></div>
+${favBtn ? `<div class=row style="margin-bottom:12px">${favBtn}</div>` : ''}
 ${d.overview ? `<p class=ov>${esc(d.overview)}</p>` : ''}
 ${seasons.map(s => `<h2>${s === 0 ? 'Specials' : 'Season ' + s}</h2><div class=eps>${d.episodes.filter(e => e.season === s).map(e => `<a class=ep href="${base}/watch/${e.id}"><b>${e.episode ?? ''}</b><span><span class=en>${esc(e.name)}</span><small>${e.runtime ? Math.round(e.runtime / 60) + ' min' : ''}${e.played ? ' · <span class=good>watched</span>' : ''}</small>${e.pct ? `<i class=bar><i style="width:${e.pct}%"></i></i>` : ''}</span></a>`).join('')}</div>`).join('')}` };
   }
   const data = { id: d.id, type: d.type, base, resume: d.resume, runtime: d.runtime, versions: d.versions, subs: d.subs, linked, share: !!share, shareDays: canShare ? shareDays : [],
     next: d.next && !share ? { id: d.next.id, label: `S${d.next.season}E${d.next.episode} · ${d.next.name}` } : null };
   const backTo = share ? '' : `<a class=back href="${esc(d.type === 'Episode' ? `${base}/watch/${d.series_id}` : back)}">← ${d.type === 'Episode' ? esc(d.series) : 'Library'}</a>`;
-  const link = !linked && linkUsers && linkUsers.length ? `<form id=linkme class="row hint"><span>Your progress isn’t saved yet. Save it as</span><select name=user>${linkUsers.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select><button>Save my progress there</button></form>`
+  const link = !linked && linkUsers && linkUsers.length ? `<form id=linkme class="row hint"><span>Your progress and favorites aren’t saved yet. Save them as</span><select name=user>${linkUsers.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select><button>Save my progress there</button></form>`
     : !linked && !share ? '<p class=hint>Progress is remembered in this browser only.</p>' : '';
   return { title, body: `${backTo}
 <div class=stage><video id=v controls playsinline preload=none ${img('Backdrop', 1280) ? `poster="${img('Backdrop', 1280)}"` : ''}>${d.subs.map(s => `<track kind=subtitles label="${esc(s.label)}" srclang="${esc(s.lang)}" src="${base}/play/${d.id}/sub/${s.n}.vtt">`).join('')}</video>
 <div id=cover class=cover><div id=coverbtns><button id=start>▶ Play</button></div></div>
 <div id=status class=status hidden></div></div>
 <div class=info><div><h1>${esc(d.name)}</h1><p class=muted>${d.type === 'Episode' ? esc(title) + ' · ' : ''}${d.year || ''}${d.runtime ? ' · ' + Math.round(d.runtime / 60) + ' min' : ''}${d.played && !share ? ' · watched' : ''}</p></div>
-<div class=row>${d.versions.length > 1 ? `<select id=ver aria-label=Version>${d.versions.map((v, i) => `<option value=${i}>${esc(v.label)}</option>`).join('')}</select>` : ''}${data.shareDays.length ? '<button type=button class=quiet id=sharebtn>Share link</button>' : ''}${data.next ? `<a class=btn href="${base}/watch/${d.next.id}">Next: ${esc(data.next.label)}</a>` : ''}</div></div>
+<div class=row>${favBtn}${d.versions.length > 1 ? `<select id=ver aria-label=Version>${d.versions.map((v, i) => `<option value=${i}>${esc(v.label)}</option>`).join('')}</select>` : ''}${data.shareDays.length ? '<button type=button class=quiet id=sharebtn>Share link</button>' : ''}${data.next ? `<a class=btn href="${base}/watch/${d.next.id}">Next: ${esc(data.next.label)}</a>` : ''}</div></div>
 <div id=sharebox></div>
 ${d.overview ? `<p class=ov>${esc(d.overview)}</p>` : ''}
 ${link}
@@ -202,7 +218,7 @@ ${share ? `<p class=hint>Shared from a private library${share.expires_at ? ` · 
 <script id=watch-data type="application/json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>` };
 }
 
-export const WATCH_CSS = `.back{display:inline-block;margin:0 0 12px;color:var(--muted);text-decoration:none}.back:hover{color:var(--text)}
+export const WATCH_CSS = `.fav[aria-pressed=true]{color:var(--accent);border-color:var(--accent)}.back{display:inline-block;margin:0 0 12px;color:var(--muted);text-decoration:none}.back:hover{color:var(--text)}
 .stage{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:16/9;max-height:78vh;width:100%}
 .stage video{width:100%;height:100%;display:block;background:#000}
 .cover{position:absolute;inset:0;display:grid;place-items:center;background:rgb(0 0 0 / .45)}.cover div{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}.cover button{font-size:16px;padding:12px 22px}
@@ -218,6 +234,20 @@ export const WATCH_CSS = `.back{display:inline-block;margin:0 0 12px;color:var(-
 
 // Client: decide direct vs converted, resume, save progress. No template-literal interpolation inside.
 export const WATCH_JS = String.raw`
+(() => {
+const fb = document.getElementById('favbtn');
+if (fb) fb.onclick = async () => {
+  const on = fb.getAttribute('aria-pressed') !== 'true', ep = / episode$/.test(fb.textContent);
+  fb.disabled = true;
+  try {
+    const r = await fetch(fb.dataset.base + '/play/favorite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: fb.dataset.item, on }) });
+    const d = await r.json().catch(() => ({ error: 'Your sign-in expired. Reload the page.' }));
+    if (!r.ok || d.error) throw new Error(d.error || r.status);
+    fb.setAttribute('aria-pressed', String(d.favorite)); fb.textContent = (d.favorite ? '★ Favorite' : '☆ Favorite') + (ep ? ' episode' : '');
+  } catch (err) { alert(err.message); }
+  fb.disabled = false;
+};
+})();
 (() => {
 if (!document.getElementById('watch-data')) return;   // show pages have no player
 const D = JSON.parse(document.getElementById('watch-data').textContent), v = document.getElementById('v');

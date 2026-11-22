@@ -7,6 +7,7 @@ import { handleJellyfin } from '../src/jellyfin.mjs';
 import { sha256Hex } from '../src/auth.mjs';
 import { createShare, handleShare, revokeShare } from '../src/shares.mjs';
 import { streamVideo } from '../src/media.mjs';
+import { handlePlayer, watchData, watchHtml } from '../src/player.mjs';
 
 const MIG = new URL('../migrations/', import.meta.url).pathname;
 const H = c => c.repeat(32);
@@ -91,4 +92,28 @@ test('share links play only their title; revoke, expiry and age-limited creators
   const html = await exp.text();
   assert.match(html, /This link has expired/); assert.match(html, /1970/); assert.doesNotMatch(html, /Paddington/, 'no title on a dead link');
   assert.equal((await handleShare(new Request('https://w.example/s/zz'), env, ctx, 'zz', '')).status, 404);
+});
+
+test('favorites from the web player show up in apps; age limits and share links hold', async () => {
+  const d = await setup(), env = { DB: d, SERVER_ID: 'x' };
+  const user = n => d.prepare('SELECT * FROM users WHERE username = ?').bind(n).first();
+  const kid = await user('kid'), adult = await user('adult');
+  const fav = (u, item, on, opts = {}) => handlePlayer(new Request('https://w.example/me/play/favorite', { method: 'POST', body: JSON.stringify({ item, on }) }),
+    env, {}, { base: '/me', userId: u?.id ?? null, viewer: u, page: () => null, ...opts }).then(async r => ({ status: r.status, body: await r.json() }));
+  const appFavs = async who => (await (await jf(env, who, '/Items?Recursive=true&Filters=IsFavorite&IncludeItemTypes=Movie,Series,Episode')).json()).Items.map(i => i.Name).sort();
+
+  assert.deepEqual((await fav(adult, R, true)).body, { favorite: true });
+  assert.deepEqual((await fav(adult, SER, true)).body, { favorite: true });
+  assert.deepEqual(await appFavs('adult'), ['Bluey', 'Heat'], 'the same favorites in Jellyfin apps');
+  assert.equal((await watchData(env, R, adult.id, adult)).favorite, true);
+  assert.match(watchHtml(await watchData(env, R, adult.id, adult), { base: '/me', back: '/me', linked: true }).body, /id=favbtn[^>]*aria-pressed="true">★ Favorite</);
+  assert.deepEqual((await fav(adult, R, false)).body, { favorite: false });
+  assert.deepEqual(await appFavs('adult'), ['Bluey']);
+  assert.deepEqual(await appFavs('kid'), [], 'per user');
+
+  assert.equal((await fav(kid, R, true)).status, 404, 'above the age limit');
+  assert.equal((await fav(kid, PG, true)).status, 200);
+  assert.equal((await fav(null, PG, true)).status, 403, 'not signed in as a library user (unlinked owner, share links)');
+  assert.equal((await fav(adult, PG, true, { allow: async () => false })).status, 404);
+  assert.doesNotMatch(watchHtml(await watchData(env, R, null, null), { base: '/s/x', back: null, linked: false, share: {} }).body, /favbtn/, 'no button on share links');
 });
