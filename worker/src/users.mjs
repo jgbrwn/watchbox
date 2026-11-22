@@ -60,7 +60,7 @@ export function inviteEmail(env, u) {
     `Hi ${name},`,
     `You've been invited to Watch, a private movie and TV library you can stream on your TV, phone or computer.`,
     `To get started, open ${link} and sign in with this email address (${u.email}). You'll get a one-time code by email. Then choose a password for your username "${u.username}".`,
-    `That page also shows how to connect your TV or phone, and lets you ask for titles that aren't in the library yet.`,
+    `That page also shows how to connect your TV or phone (its Setup tab keeps those steps, so you can go back to them any time), and lets you ask for titles that aren't in the library yet.`,
     `This invite is good for ${INVITE_DAYS} days.`
   ];
   return {

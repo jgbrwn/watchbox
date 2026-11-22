@@ -98,7 +98,7 @@ const CSS = `
 *{box-sizing:border-box}body{margin:0;font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
 a{color:var(--accent)}header{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 .brand{display:flex;align-items:center;gap:8px;font-weight:650}nav{display:flex;gap:2px;flex:1;overflow-x:auto;scrollbar-width:none}
-.tab{border:0;background:none;color:var(--muted);padding:7px 12px;border-radius:8px;cursor:pointer;font:inherit;font-weight:550;white-space:nowrap}.tab[aria-selected=true]{color:var(--text);background:var(--surface-2);box-shadow:inset 0 -2px 0 var(--accent)}
+.copy{padding:2px 8px;font-size:13px;margin-left:6px;vertical-align:1px}.tab{border:0;background:none;color:var(--muted);padding:7px 12px;border-radius:8px;cursor:pointer;font:inherit;font-weight:550;white-space:nowrap}.tab[aria-selected=true]{color:var(--text);background:var(--surface-2);box-shadow:inset 0 -2px 0 var(--accent)}
 main{max-width:900px;margin:0 auto;padding:22px 16px 60px}main.wide{max-width:1180px}.pane{display:none}.pane.on{display:block}
 h2{font-size:17px;margin:28px 0 10px}h2:first-child{margin-top:0}h3{font-size:15px;margin:0 0 6px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:12px}
@@ -126,7 +126,7 @@ export function page(env, title, body, js = '', tabs = false, css = '') {
 <title>${esc(title)} · Watch</title>
 <script>try{const t=localStorage.getItem('watch-theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t}catch{}</script>
 <style>${CSS}${css}</style>
-<header><div class=brand>${ICON}Watch</div>${tabs ? `<nav role=tablist><button class=tab data-tab=start>Start</button><button class=tab data-tab=library>Library</button><button class=tab data-tab=requests>Requests</button><button class=tab data-tab=account>Account</button></nav>` : '<span style="flex:1"></span>'}
+<header><div class=brand>${ICON}Watch</div>${tabs ? `<nav role=tablist><button class=tab data-tab=start>Setup</button><button class=tab data-tab=library>Library</button><button class=tab data-tab=requests>Requests</button><button class=tab data-tab=account>Account</button></nav>` : '<span style="flex:1"></span>'}
 <button type=button class="quiet theme" id=theme aria-label="Switch theme" title="Switch theme">◐</button></header>
 <main${css ? ' class=wide' : ''}>${body}</main>
 <script>
@@ -157,7 +157,8 @@ function mainHtml(env, u) {
 <div id=notices></div>
 <section class=pane id=start>
 <h2>Connect your TV or phone</h2>
-<div class=card><div class=kv><b>Server</b><span><code>${server}</code></span><b>Username</b><span><code>${esc(u.username)}</code></span><b>Password</b><span>the one you chose (change it under Account)</span></div></div>
+<p class=hint>These steps stay here on the Setup tab, so you can come back to them when you add another TV or phone.</p>
+<div class=card><div class=kv><b>Server</b><span><code>${server}</code> <button type=button class="quiet copy" data-copy="${server}">Copy</button></span><b>Username</b><span><code>${esc(u.username)}</code> <button type=button class="quiet copy" data-copy="${esc(u.username)}">Copy</button></span><b>Password</b><span>the one you chose (change it under <a href="#account">Account</a>)</span></div></div>
 <p class=hint>Watch works with apps that support <b>Jellyfin</b> servers. Add a Jellyfin server in the app, paste the server address above, then sign in. VidHub is the app this library is tested with; the others speak the same language and should work too.</p>
 <div class=card>
 <details open><summary>Android TV, Google TV, onn, Chromecast with Google TV</summary><p><b>VidHub</b> (Play Store) → Add → Jellyfin → enter the server, username and password. Also: <b>Jellyfin for Android TV</b>, <b>Wholphin</b>.</p></details>
@@ -210,6 +211,11 @@ function show(id) {
   if (id === 'requests' || id === 'account') state();
 }
 tabs.forEach(b => b.onclick = () => { history.replaceState(null, '', '#' + b.dataset.tab); show(b.dataset.tab); });
+document.querySelectorAll('.copy').forEach(b => b.onclick = async () => {
+  try { await navigator.clipboard.writeText(b.dataset.copy); }
+  catch { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); document.execCommand('copy'); }
+  b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500);
+});
 addEventListener('hashchange', () => show(location.hash.slice(1)));
 
 let lt; $('#lq').oninput = () => { clearTimeout(lt); lt = setTimeout(lib, 250); }; $('#ltype').onchange = lib;

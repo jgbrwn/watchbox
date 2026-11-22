@@ -75,7 +75,8 @@ The download box only needs room for part of a download:
 ## Guests (`/me`)
 
 Invite someone on Users: they get an email with a link, sign in to `/me` with a one-time code sent to that email,
-set their password, and follow the setup steps for their TV or phone. On `/me` they can browse and watch in the
+set their password, and follow the setup steps for their TV or phone. The steps (server address, username, which app
+to install, Quick Connect) stay on `/me`'s **Setup** tab for when they add another device. On `/me` they can browse and watch in the
 browser, ask for movies, shows or YouTube videos (paste a link), see their requests' progress, manage their devices
 and share links. Each person has their own progress and favorites; nobody sees anyone else's. The ☆ Favorite button on a
 movie, show or episode page in the browser marks it for that person, and their apps show it under Favorites (and the
